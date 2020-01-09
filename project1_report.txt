@@ -1,0 +1,41 @@
+1. Basic information
+Team #:
+Github Repo Link:
+Student 1 UCI NetID:
+Student 1 Name:
+Student 2 UCI NetID (if applicable):
+Student 2 Name (if applicable):
+
+
+2. Internal Record Format
+- Show your record format design and describe how your design satisfies O(1) field access.
+
+
+
+- Describe how you store a VarChar field.
+
+
+
+3. Page Format
+- Show your page format design
+
+
+
+4. Page Management
+- Show your algorithm of finding next available-space page when inserting a record.
+
+
+
+- Show your hidden page format design if applicable
+
+
+
+5. Implementation Detail
+- Other implementation details goes here.
+
+
+
+6. Other (optional)
+- Freely use this section to tell us about things that are related to the project 1, but not related to the other sections (optional)
+
+
