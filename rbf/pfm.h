@@ -5,9 +5,12 @@ typedef unsigned PageNum;
 typedef int RC;
 
 #define PAGE_SIZE 4096
+#define NUM_COUNTERS 3
+#define OFFSET 12
 
 #include <string>
 #include <vector>
+#include <fstream>
 
 class FileHandle;
 
@@ -26,6 +29,8 @@ protected:
     PagedFileManager(const PagedFileManager &);                         // Prevent construction by copying
     PagedFileManager &operator=(const PagedFileManager &);              // Prevent assignment
 
+private:
+    static PagedFileManager *_pf_manager;
 };
 
 class FileHandle {
@@ -44,6 +49,15 @@ public:
     unsigned getNumberOfPages();                                        // Get the number of pages in the file
     RC collectCounterValues(unsigned &readPageCount, unsigned &writePageCount,
                             unsigned &appendPageCount);                 // Put current counter values into variables
+    std::fstream& getFile();
+    void initFile(const std::string &fileName);
+    RC openFile(const std::string &fileName);
+    RC closeFile();
+    RC createFile(const std::string &fileName);
+    RC updateCounterToFile();
+
+private:
+    std::fstream _file;
 };
 
 #endif
