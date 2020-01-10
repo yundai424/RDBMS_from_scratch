@@ -7,6 +7,7 @@ typedef int RC;
 #define PAGE_SIZE 4096
 
 #include <string>
+#include <vector>
 
 class FileHandle;
 

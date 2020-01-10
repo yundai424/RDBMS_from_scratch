@@ -11,7 +11,7 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
     add_definitions(-DDEBUG=1)
 endif ()
 
-add_library(PFM ./rbf/pfm.cc)
+add_library(PFM ./rbf/pfm.cc rbf/logger.cc)
 add_library(RBFM ./rbf/rbfm.cc)
 
 file(GLOB files rbf/rbftest*.cc)
