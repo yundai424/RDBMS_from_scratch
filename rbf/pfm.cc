@@ -2,12 +2,12 @@
 #include <iostream>
 
 bool ifFileExists(const std::string &fileName) {
-    std::ifstream file(fileName);
-    if (file) {
-        file.close();
-        return true;
-    }
-    return false;
+  std::ifstream file(fileName);
+  if (file) {
+    file.close();
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -22,7 +22,7 @@ PagedFileManager &PagedFileManager::instance() {
 
 PagedFileManager::PagedFileManager() = default;
 
-PagedFileManager::~PagedFileManager() {delete _pf_manager;}
+PagedFileManager::~PagedFileManager() { delete _pf_manager; }
 
 PagedFileManager::PagedFileManager(const PagedFileManager &) = default;
 
@@ -61,27 +61,26 @@ FileHandle::FileHandle() {
 
 FileHandle::~FileHandle() = default;
 
-std::fstream & FileHandle::getFile() {return _file;}
+std::fstream &FileHandle::getFile() { return _file; }
 
-RC FileHandle::openFile(const std::string & fileName) {
+RC FileHandle::openFile(const std::string &fileName) {
     if (!ifFileExists(fileName))
         return -1;
     if (_file.is_open())
         return -1;
     _file.open(fileName, std::ios::in | std::ios::out | std::ios::binary);
 
-    // update counter using metadata
+    // update counter to metadata
     _file.seekg(0);
-    _file.read((char*)&readPageCounter, sizeof(unsigned));
-    _file.read((char*)&writePageCounter, sizeof(unsigned));
-    _file.read((char*)&appendPageCounter, sizeof(unsigned));
+    _file.read((char *) &readPageCounter, sizeof(unsigned));
+    _file.read((char *) &writePageCounter, sizeof(unsigned));
+    _file.read((char *) &appendPageCounter, sizeof(unsigned));
     return 0;
 }
 
 RC FileHandle::closeFile() {
     if (!_file.is_open())
         return -1;
-    // flush new counters to metadata
     updateCounterToFile();
     _file.close();
     return 0;
@@ -91,19 +90,18 @@ RC FileHandle::updateCounterToFile() {
     if (!_file.is_open())
         return -1;
     _file.seekp(0);
-    _file.write((char*)&readPageCounter, sizeof(unsigned));
-    _file.write((char*)&writePageCounter, sizeof(unsigned));
-    _file.write((char*)&appendPageCounter, sizeof(unsigned));
+    _file.write((char *) &readPageCounter, sizeof(unsigned));
+    _file.write((char *) &writePageCounter, sizeof(unsigned));
+    _file.write((char *) &appendPageCounter, sizeof(unsigned));
     return 0;
 }
 
-RC FileHandle::createFile(const std::string & fileName) {
+RC FileHandle::createFile(const std::string &fileName) {
     if (ifFileExists(fileName))
         return -1;
     if (_file.is_open())
         return -1;
     _file.open(fileName, std::ios::out | std::ios::binary);
-    // write counters as metadata to head of file
     if (updateCounterToFile() != 0)
         return -1;
     return closeFile();
@@ -114,7 +112,7 @@ RC FileHandle::readPage(PageNum pageNum, void *data) {
     if (pageNum >= getNumberOfPages() || !_file.is_open())
         return -1;
     _file.seekg(OFFSET + PAGE_SIZE * pageNum);
-    _file.read((char*)data, PAGE_SIZE);
+    _file.read((char *) data, PAGE_SIZE);
     readPageCounter++;
     return 0;
 }
@@ -123,7 +121,7 @@ RC FileHandle::writePage(PageNum pageNum, const void *data) {
     if (pageNum >= getNumberOfPages() || !_file.is_open())
         return -1;
     _file.seekp(OFFSET + PAGE_SIZE * pageNum);
-    _file.write((char*)data, PAGE_SIZE);
+    _file.write((char *) data, PAGE_SIZE);
     writePageCounter++;
     return 0;
 }
@@ -132,7 +130,7 @@ RC FileHandle::appendPage(const void *data) {
     if (!_file.is_open())
         return -1;
     _file.seekp(OFFSET + PAGE_SIZE * appendPageCounter);
-    _file.write((char*)data, PAGE_SIZE);
+    _file.write((char *) data, PAGE_SIZE);
     appendPageCounter++;
     return 0;
 }
@@ -146,4 +144,8 @@ RC FileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePage
     writePageCount = writePageCounter;
     appendPageCount = appendPageCounter;
     return 0;
+}
+
+void FileHandle::writeRecord(const void *record, unsigned size) {
+    _file.write((char *) record, size);
 }
