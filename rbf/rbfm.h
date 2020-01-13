@@ -145,10 +145,18 @@ class RecordBasedFileManager {
   std::vector<std::shared_ptr<Page>> pages_;
   std::map<size_t, FreeSlot> free_slots_;
 
+  void appendNewPage(FileHandle &f);
 
-  void AppendNewPage(FileHandle & f);
+  /**
+   *
+   * @param recordDescriptor
+   * @param data
+   * @return <directories, real data, real data size, total size>
+   */
+  std::tuple<std::vector<directory_entry>, const char *, size_t, size_t>
+    decodeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
 
-  void *decodeRecord(const std::vector<Attribute> &recordDescriptor, const void *data, unsigned &recordLength);
+
   short firstAvailableSlot(const void *data);
 
 };

@@ -1,5 +1,6 @@
-#include "rbfm.h"
 #include <math.h>
+
+#include "rbfm.h"
 
 RecordBasedFileManager *RecordBasedFileManager::_rbf_manager = nullptr;
 
@@ -36,6 +37,23 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
                                         const void *data, RID &rid) {
   // use the array of field offsets method for variable length record introduced in class as the format of record
   // each record has a leading series of bytes indicating the pointers to each field
+
+
+  //
+
+
+  auto res = decodeRecord(recordDescriptor, data);
+  std::vector<directory_entry> &directories = std::get<0>(res);
+  const char *real_data = std::get<1>(res);
+  size_t real_data_size = std::get<2>(res);
+  size_t total_size = std::get<3>(res);
+
+  // find target position to insert according to total_size
+  std::fstream fs;
+  size_t pos;
+  fs.seekp(pos);
+  fs.write((char *) directories.data(), sizeof(directory_entry) * directories.size());
+  fs.write(real_data, real_data_size);
 
   return 0;
 }
@@ -74,26 +92,55 @@ RC RecordBasedFileManager::scan(FileHandle &fileHandle, const std::vector<Attrib
  * ========= Utility functions ==========
  */
 
-void RecordBasedFileManager::AppendNewPage(FileHandle & f) {
+void RecordBasedFileManager::appendNewPage(FileHandle &f) {
   char empty[PAGE_SIZE];
   f.appendPage(empty);
+  // TODO
 
 }
 
-void *RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescriptor,
-                                           const void *data,
-                                           unsigned &recordLength) {
-  int numFields = recordDescriptor.size();
-  int ptrsLength = numFields * sizeof(short);
-  int nullIndicatorLength = ceil((double) numFields / 8);
+std::tuple<std::vector<directory_entry>, const char *, size_t, size_t>
+RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescriptor,
+                                     const void *data) {
+  // parse null indicators
+  std::vector<bool> null_indicators;
+  int fields_num = recordDescriptor.size();
+  int indicator_bytes_num = int(ceil(double(fields_num) / 8));
+  unsigned char indicator_bytes[indicator_bytes_num];
+  unsigned char *pt = indicator_bytes;
+  memcpy(indicator_bytes, data, indicator_bytes_num);
 
-  void *ptrs = (char *) malloc(ptrsLength);
-  int ptr = nullIndicatorLength;
+  for (auto i = 0; i < fields_num; ++i) {
+    unsigned char mask = 1;
+    mask = mask << i;
+    null_indicators.push_back(mask & (*pt));
+    if (i % 8 == 7) pt++;
+  }
+
+  // the real data position
+  const char *real_data = ((char *) data) + indicator_bytes_num;
+
+  // create directories
+  std::vector<directory_entry> directories;
+  unsigned offset = sizeof(directory_entry) * fields_num;
+  for (int i = 0; i < fields_num; ++i) {
+    if (null_indicators[i]) {
+      directories.push_back(offset);
+      offset += recordDescriptor[i].length;
+    } else {
+      directories.push_back(-1); // -1 to indicate null
+    }
+  }
+//  directories.push_back(offset); // I want to use one additional size to mark the end of record
+  size_t real_data_size = offset - sizeof(directory_entry) * fields_num;
+
+  return {directories, real_data, real_data_size, offset};
 
 }
 
 short RecordBasedFileManager::firstAvailableSlot(const void *data) {
 
 }
+
 
 

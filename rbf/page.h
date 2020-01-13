@@ -7,6 +7,8 @@
 #include <fstream>
 #include <vector>
 
+#include "types.h"
+
 typedef unsigned short SID;
 
 
