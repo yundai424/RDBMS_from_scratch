@@ -62,8 +62,6 @@ class FileHandle {
   RC collectCounterValues(unsigned &readPageCount, unsigned &writePageCount,
                           unsigned &appendPageCount);                 // Put current counter values into variables
 
-  std::fstream &getFile();
-  void initFile(const std::string &fileName);
   // write counter to metadata
   void writeRecord(const void *record, unsigned size);
 

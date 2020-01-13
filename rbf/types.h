@@ -1,0 +1,6 @@
+#ifndef CS222_FALL19_TYPES_H
+#define CS222_FALL19_TYPES_H
+
+
+
+#endif //CS222_FALL19_TYPES_H

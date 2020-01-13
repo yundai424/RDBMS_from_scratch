@@ -1,7 +1,11 @@
 #ifndef _rbfm_h_
 #define _rbfm_h_
 
+#include <memory>
+#include <map>
+
 #include "pfm.h"
+#include "page.h"
 
 // Record ID
 typedef struct {
@@ -136,6 +140,14 @@ class RecordBasedFileManager {
 
  private:
   static RecordBasedFileManager *_rbf_manager;
+
+  PagedFileManager *pfm_;
+  std::vector<std::shared_ptr<Page>> pages_;
+  std::map<size_t, FreeSlot> free_slots_;
+
+
+  void AppendNewPage(FileHandle & f);
+
   void *decodeRecord(const std::vector<Attribute> &recordDescriptor, const void *data, unsigned &recordLength);
   short firstAvailableSlot(const void *data);
 

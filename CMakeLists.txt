@@ -12,7 +12,7 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
 endif ()
 
 add_library(PFM ./rbf/pfm.cc rbf/logger.cc)
-add_library(RBFM ./rbf/rbfm.cc)
+add_library(RBFM ./rbf/rbfm.cc rbf/page.cc)
 
 file(GLOB files rbf/rbftest*.cc)
 foreach (file ${files})
