@@ -20,9 +20,13 @@ struct FreeSlot {
 };
 
 struct Page {
+
+  static inline size_t getPos(PageNum page_num) {
+    return OFFSET + page_num * PAGE_SIZE;
+  }
+
   unsigned pid;
   size_t begin; // begin offset
-  std::fstream &fs;
   std::vector<size_t> records_offset; // offset
 
   Page(unsigned page_id, std::fstream &fstream);

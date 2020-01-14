@@ -30,12 +30,6 @@ class PagedFileManager {
 };
 
 class FileHandle {
- private:
-
-  inline size_t GetPos(PageNum pageNum) const {
-    return OFFSET + pageNum * PAGE_SIZE;
-  }
-
  public:
   // variables to keep the counter for each operation
   unsigned readPageCounter;
@@ -54,7 +48,7 @@ class FileHandle {
                           unsigned &appendPageCount);                 // Put current counter values into variables
 
   // write counter to metadata
-  void writeRecord(const void *record, unsigned size);
+  RC writeRecord(size_t pos, const void *record, unsigned size);
 
   RC createFile(const std::string &fileName);
   RC openFile(const std::string &fileName);
