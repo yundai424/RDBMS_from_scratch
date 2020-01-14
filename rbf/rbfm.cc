@@ -45,11 +45,6 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
 
   // TODO: find target position to insert according to total_size
   FreeSlot slot = firstAvailableSlot(data, fileHandle);
-  std::fstream &fs = slot.page->fs;
-  size_t pos =  slot.begin;
-  fs.seekp(pos);
-  fs.write((char *) directories.data(), sizeof(directory_entry) * directories.size());
-  fs.write(real_data, real_data_size);
 
   // TODO: add metadata to the end of page, assign RID
 
@@ -90,11 +85,11 @@ RC RecordBasedFileManager::scan(FileHandle &fileHandle, const std::vector<Attrib
  * ========= Utility functions ==========
  */
 
-void RecordBasedFileManager::appendNewPage(FileHandle &f) {
+// append a new page and return the pid
+unsigned RecordBasedFileManager::appendNewPage(FileHandle &file_handle) {
   char empty[PAGE_SIZE];
-  f.appendPage(empty);
-  // TODO
-
+  file_handle.appendPage(empty);
+  return file_handle.getNumberOfPages() - 1;
 }
 
 std::tuple<std::vector<directory_entry>, const char *, size_t, size_t>
@@ -137,7 +132,7 @@ RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescrip
 
 }
 
-// find the first available freeslot to insert data
+// find the first available free slot to insert data
 // will also handle creating new page / new slot when there's no available one
 FreeSlot &RecordBasedFileManager::firstAvailableSlot(const void *data, FileHandle &file_handle) {
   if (file_handle.getNumberOfPages() > 0) {
@@ -147,7 +142,7 @@ FreeSlot &RecordBasedFileManager::firstAvailableSlot(const void *data, FileHandl
 
   }
   // 2. zero page or no page available: create new page
-
+  unsigned pid = appendNewPage(file_handle);
 }
 
 // move the records behind the given slot ahead to fill the empty spaces

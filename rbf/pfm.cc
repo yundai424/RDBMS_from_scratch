@@ -126,7 +126,7 @@ RC FileHandle::readPage(PageNum pageNum, void *data) {
   // pageNum exceed total number of pages
   if (pageNum >= getNumberOfPages() || !_file.is_open())
     return -1;
-  _file.seekg(GetPos(pageNum));
+  _file.seekg(Page::getPos(pageNum));
   _file.read((char *) data, PAGE_SIZE);
   readPageCounter++;
   return 0;
@@ -135,16 +135,18 @@ RC FileHandle::readPage(PageNum pageNum, void *data) {
 RC FileHandle::writePage(PageNum pageNum, const void *data) {
   if (pageNum >= getNumberOfPages() || !_file.is_open())
     return -1;
-  _file.seekp(GetPos(pageNum));
+  _file.seekp(Page::getPos(pageNum));
   _file.write((char *) data, PAGE_SIZE);
   writePageCounter++;
   return 0;
 }
 
 RC FileHandle::appendPage(const void *data) {
-  if (!_file.is_open())
+  if (!_file.is_open()) {
+    DB_WARNING << "File is not opened!";
     return -1;
-  _file.seekp(GetPos(appendPageCounter));
+  }
+  _file.seekp(Page::getPos(appendPageCounter));
   _file.write((char *) data, PAGE_SIZE);
   appendPageCounter++;
   return 0;
@@ -161,6 +163,12 @@ RC FileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePage
   return 0;
 }
 
-void FileHandle::writeRecord(const void *record, unsigned size) {
+RC FileHandle::writeRecord(size_t pos, const void *record, unsigned size) {
+  if (!_file.is_open()) {
+    DB_WARNING << "File is not opened!";
+    return -1;
+  }
+  _file.seekp(pos);
   _file.write((char *) record, size);
+  return 0;
 }
