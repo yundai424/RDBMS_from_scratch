@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <map>
+#include <unordered_set>
 
 #include "pfm.h"
 
@@ -100,10 +101,6 @@ class RecordBasedFileManager {
           const std::vector<std::string> &attributeNames, // a list of projected attributes
           RBFM_ScanIterator &rbfm_ScanIterator);
 
-  static inline unsigned directoryOverheadLength(int fields_num) {
-    return sizeof(directory_entry) * (fields_num + 1);
-  }
-
  protected:
   RecordBasedFileManager();                                                   // Prevent construction
   ~RecordBasedFileManager();                                                  // Prevent unwanted destruction
@@ -115,15 +112,35 @@ class RecordBasedFileManager {
 
   PagedFileManager *pfm_;
   std::vector<std::shared_ptr<Page>> pages_;
-  std::map<size_t, FreeSlot> free_slots_;
+  std::map<size_t, std::unordered_set<Page *>> free_slots_; // assume each page only have one free slot
 
-  unsigned appendNewPage(FileHandle &file_handle);
+  /**
+   * load meta of next page into memory
+   * @param fileHandle
+   */
+  void loadNextPage(FileHandle &fileHandle);
 
-  std::tuple<std::vector<directory_entry>, const char *, size_t, size_t>
-  decodeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
+  /**
+   * append a new page and return the pid
+   * @param file_handle
+   */
+  void appendNewPage(FileHandle &file_handle);
 
-  FreeSlot &firstAvailableSlot(const void *data, FileHandle &file_handle);
+
+  /**
+   * decode data to std::vector<char> which is ready to be inserted into page
+   * @param recordDescriptor
+   * @param data
+   * @return
+   */
+  std::vector<char> decodeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
+
+  Page *findAvailableSlot(size_t size, FileHandle &file_handle);
   void rearrange(FreeSlot &slot, size_t total_size);
+
+  static inline unsigned directoryOverheadLength(int fields_num) {
+    return sizeof(directory_entry) * (fields_num + 1);
+  }
 
 };
 

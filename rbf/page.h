@@ -5,12 +5,14 @@
 #include <vector>
 
 #include "types.h"
-#include "pfm.h"
 
-typedef unsigned short SID;
+class FileHandle;
+
+typedef unsigned short SID; // slod it
+typedef unsigned PID; // page id
 
 struct Page; // Forward declarations
-class FileHandler;
+
 struct FreeSlot {
   Page *page;
   size_t size;
@@ -21,23 +23,36 @@ struct FreeSlot {
   }
 };
 
-struct Page {
+class Page {
 
+  std::vector<int> records_offset; // offset, could be negative (-1 means invalid)
+  size_t data_end;
+  char *data;
 
+  void parseMeta();
 
-  unsigned pid;
-  size_t begin; // begin offset
-  std::vector<size_t> records_offset; // offset
+  SID findNextSlotID();
 
-  FileHandler * handle_;
+ public:
 
-  char data[PAGE_SIZE];
+  PID pid;
+  size_t free_space; // free_space = real_free_space - sizeof(unsigned), for meta
 
-  Page(unsigned page_id, FileHandler * file_handle);
+  explicit Page(PID page_id);
 
-  void Load();
+  ~Page();
 
-  void Save();
+  void load(FileHandle &handle);
+
+  void dump(FileHandle &handle);
+
+  void freeMem();
+
+  RID insertData(const char *new_data, size_t size);
+
+  std::string ToString() const;
+
+  static void initPage(char *page_data);
 
 };
 
