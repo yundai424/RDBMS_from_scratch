@@ -1,6 +1,9 @@
 #ifndef CS222_FALL19_TYPES_H
 #define CS222_FALL19_TYPES_H
 
+#include <string>
+#include <vector>
+#include <fstream>
 /**
  * ========= typedefs and shared structs ===========
  */
@@ -44,10 +47,6 @@ struct Attribute {
  */
 
 #define PAGE_SIZE 4096
-#define OFFSET 12
 
-#include <string>
-#include <vector>
-#include <fstream>
 
 #endif //CS222_FALL19_TYPES_H

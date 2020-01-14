@@ -5,10 +5,12 @@
 #include <vector>
 
 #include "types.h"
+#include "pfm.h"
 
 typedef unsigned short SID;
 
 struct Page; // Forward declarations
+class FileHandler;
 struct FreeSlot {
   Page *page;
   size_t size;
@@ -21,15 +23,17 @@ struct FreeSlot {
 
 struct Page {
 
-  static inline size_t getPos(PageNum page_num) {
-    return OFFSET + page_num * PAGE_SIZE;
-  }
+
 
   unsigned pid;
   size_t begin; // begin offset
   std::vector<size_t> records_offset; // offset
 
-  Page(unsigned page_id, std::fstream &fstream);
+  FileHandler * handle_;
+
+  char data[PAGE_SIZE];
+
+  Page(unsigned page_id, FileHandler * file_handle);
 
   void Load();
 

@@ -56,7 +56,10 @@ class FileHandle {
   RC updateCounterToFile();
 
  private:
-//  static constexpr size_t OFFSET = 12;
+  static inline size_t getPos(PageNum page_num) {
+    return OFFSET + page_num * PAGE_SIZE;
+  }
+  static constexpr size_t OFFSET = 3 * sizeof(unsigned);
   std::fstream _file;
 };
 
