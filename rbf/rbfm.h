@@ -5,38 +5,6 @@
 #include <map>
 
 #include "pfm.h"
-#include "page.h"
-
-// Record ID
-typedef struct {
-  unsigned pageNum;    // page number
-  unsigned short slotNum;    // slot number in the page
-} RID;
-
-// Attribute
-typedef enum {
-  TypeInt = 0, TypeReal, TypeVarChar
-} AttrType;
-
-typedef unsigned AttrLength;
-
-struct Attribute {
-  std::string name;  // attribute name
-  AttrType type;     // attribute type
-  AttrLength length; // attribute length
-};
-
-// Comparison Operator (NOT needed for part 1 of the project)
-typedef enum {
-  EQ_OP = 0, // no condition// =
-  LT_OP,      // <
-  LE_OP,      // <=
-  GT_OP,      // >
-  GE_OP,      // >=
-  NE_OP,      // !=
-  NO_OP       // no condition
-} CompOp;
-
 
 /********************************************************************
 * The scan iterator is NOT required to be implemented for Project 1 *
@@ -132,6 +100,10 @@ class RecordBasedFileManager {
           const std::vector<std::string> &attributeNames, // a list of projected attributes
           RBFM_ScanIterator &rbfm_ScanIterator);
 
+  static inline unsigned directoryOverheadLength(int fields_num) {
+    return sizeof(directory_entry) * (fields_num + 1);
+  }
+
  protected:
   RecordBasedFileManager();                                                   // Prevent construction
   ~RecordBasedFileManager();                                                  // Prevent unwanted destruction
@@ -156,8 +128,8 @@ class RecordBasedFileManager {
   std::tuple<std::vector<directory_entry>, const char *, size_t, size_t>
     decodeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
 
-
-  short firstAvailableSlot(const void *data);
+  FreeSlot &firstAvailableSlot(const void *data, FileHandle &file_handle);
+  void rearrange(FreeSlot &slot, size_t total_size);
 
 };
 

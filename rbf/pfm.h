@@ -1,16 +1,7 @@
 #ifndef _pfm_h_
 #define _pfm_h_
 
-typedef unsigned PageNum;
-typedef int RC;
-
-#define PAGE_SIZE 4096
-#define NUM_COUNTERS 3
-#define OFFSET 12
-
-#include <string>
-#include <vector>
-#include <fstream>
+#include "page.h"
 
 class FileHandle;
 

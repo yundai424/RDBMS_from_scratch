@@ -18,42 +18,40 @@ RecordBasedFileManager::RecordBasedFileManager(const RecordBasedFileManager &) =
 RecordBasedFileManager &RecordBasedFileManager::operator=(const RecordBasedFileManager &) = default;
 
 RC RecordBasedFileManager::createFile(const std::string &fileName) {
-  return PagedFileManager::instance().createFile(fileName);
+  return pfm_->createFile(fileName);
 }
 
 RC RecordBasedFileManager::destroyFile(const std::string &fileName) {
-  return PagedFileManager::instance().destroyFile(fileName);
+  return pfm_->destroyFile(fileName);
 }
 
 RC RecordBasedFileManager::openFile(const std::string &fileName, FileHandle &fileHandle) {
-  return PagedFileManager::instance().openFile(fileName, fileHandle);
+  return pfm_->openFile(fileName, fileHandle);
 }
 
 RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
-  return PagedFileManager::instance().closeFile(fileHandle);
+  return pfm_->closeFile(fileHandle);
 }
 
 RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const void *data, RID &rid) {
   // use the array of field offsets method for variable length record introduced in class as the format of record
   // each record has a leading series of bytes indicating the pointers to each field
-
-
-  //
-
-
   auto res = decodeRecord(recordDescriptor, data);
   std::vector<directory_entry> &directories = std::get<0>(res);
   const char *real_data = std::get<1>(res);
   size_t real_data_size = std::get<2>(res);
   size_t total_size = std::get<3>(res);
 
-  // find target position to insert according to total_size
-  std::fstream fs;
-  size_t pos;
+  // TODO: find target position to insert according to total_size
+  FreeSlot slot = firstAvailableSlot(data, fileHandle);
+  std::fstream &fs = slot.page->fs;
+  size_t pos =  slot.begin;
   fs.seekp(pos);
   fs.write((char *) directories.data(), sizeof(directory_entry) * directories.size());
   fs.write(real_data, real_data_size);
+
+  // TODO: add metadata to the end of page, assign RID
 
   return 0;
 }
@@ -112,7 +110,7 @@ RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescrip
 
   for (auto i = 0; i < fields_num; ++i) {
     unsigned char mask = 1;
-    mask = mask << i;
+    mask = mask << (i % 8);
     null_indicators.push_back(mask & (*pt));
     if (i % 8 == 7) pt++;
   }
@@ -120,25 +118,40 @@ RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescrip
   // the real data position
   const char *real_data = ((char *) data) + indicator_bytes_num;
 
-  // create directories
+  // create directories: "array of field offsets"
+  // the first element in the array indicates the number of fields in this record
+  // then the following elements indicate the END of records instead of head
   std::vector<directory_entry> directories;
-  unsigned offset = sizeof(directory_entry) * fields_num;
+  directories.push_back(fields_num);
+  unsigned offset = directoryOverheadLength(fields_num); // offset from the head of formatted record
   for (int i = 0; i < fields_num; ++i) {
     if (null_indicators[i]) {
-      directories.push_back(offset);
-      offset += recordDescriptor[i].length;
-    } else {
       directories.push_back(-1); // -1 to indicate null
+    } else {
+      offset += recordDescriptor[i].length;
+      directories.push_back(offset);
     }
   }
-//  directories.push_back(offset); // I want to use one additional size to mark the end of record
-  size_t real_data_size = offset - sizeof(directory_entry) * fields_num;
-
+  size_t real_data_size = offset - directoryOverheadLength(fields_num);
   return {directories, real_data, real_data_size, offset};
 
 }
 
-short RecordBasedFileManager::firstAvailableSlot(const void *data) {
+// find the first available freeslot to insert data
+// will also handle creating new page / new slot when there's no available one
+FreeSlot &RecordBasedFileManager::firstAvailableSlot(const void *data, FileHandle &file_handle) {
+  if (file_handle.getNumberOfPages() > 0) {
+    // 0. check if the last (current) page has enough space
+
+    // 1. find the 1st page with free space
+
+  }
+  // 2. zero page or no page available: create new page
+
+}
+
+// move the records behind the given slot ahead to fill the empty spaces
+void RecordBasedFileManager::rearrange(FreeSlot &slot, size_t total_size) {
 
 }
 
