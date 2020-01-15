@@ -114,7 +114,7 @@ void RecordBasedFileManager::appendNewPage(FileHandle &file_handle) {
   loadNextPage(file_handle);
 }
 
-vector<char>
+std::vector<char>
 RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescriptor,
                                      const void *data) {
   // parse null indicators

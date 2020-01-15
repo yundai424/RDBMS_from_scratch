@@ -1,6 +1,8 @@
 #ifndef _pfm_h_
 #define _pfm_h_
 
+#include <cstring>
+
 #include "page.h"
 
 class FileHandle;
