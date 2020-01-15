@@ -75,9 +75,6 @@ RC FileHandle::openFile(const std::string &fileName) {
   _file.read((char *) &readPageCounter, sizeof(unsigned));
   _file.read((char *) &writePageCounter, sizeof(unsigned));
   _file.read((char *) &appendPageCounter, sizeof(unsigned));
-//    DB_DEBUG << "header read. readPageCounter: " << readPageCounter
-//             << " writePageCounter: " << writePageCounter
-//             << " appendPageCounter: " << appendPageCounter;
   return 0;
 }
 

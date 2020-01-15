@@ -25,18 +25,17 @@ struct FreeSlot {
 
 class Page {
 
-  std::vector<int> records_offset; // offset, could be negative (-1 means invalid)
+//  std::vector<int> records_offset; // offset, could be negative (-1 means invalid)
   size_t data_end;
   char *data;
 
   void parseMeta();
 
-  SID findNextSlotID();
-
  public:
 
   PID pid;
   size_t free_space; // free_space = real_free_space - sizeof(unsigned), for meta
+  unsigned short num_slots;
 
   explicit Page(PID page_id);
 
@@ -54,10 +53,11 @@ class Page {
 
   static void initPage(char *page_data);
 
-  static unsigned encodeRecordOffset(size_t offset, RID pointer);
+  static unsigned encodeDirectory(DirectoryType type, unsigned data_offset, PID pid, SID sid);
 
-  static RID decodeRecordOffset(RID rid);
+  static std::pair<unsigned, RID> decodeDirectory(unsigned directory);
 
+  std::vector<std::pair<unsigned, RID>> getRecordOffsets();
 
   /**
    * switch data beginning from begin forward by length
@@ -69,7 +69,9 @@ class Page {
 
  private:
 
-  void updateCounter(int counter);
+  std::vector<unsigned> parseRecordOffset();
+
+  void writeNumSlotAndFreeSpace();
 
 };
 

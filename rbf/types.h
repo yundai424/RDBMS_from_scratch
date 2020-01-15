@@ -23,6 +23,10 @@ typedef enum {
   TypeInt = 0, TypeReal, TypeVarChar
 } AttrType;
 
+typedef enum {
+  Normal = 0, Empty, Forwarding
+} DirectoryType;
+
 typedef unsigned AttrLength;
 
 // Comparison Operator (NOT needed for part 1 of the project)

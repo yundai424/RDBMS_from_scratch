@@ -24,15 +24,10 @@ void Page::freeMem() {
 RID Page::insertData(const char *new_data, size_t size) {
   memcpy(data + data_end, new_data, size);
 
-  SID sid = findNextSlotID();
-  if (sid == records_offset.size()) {
-    // new slot
-    free_space -= sizeof(unsigned);
-    records_offset.push_back(data_end);
-  } else {
-    // use previous deleted slot
-    records_offset[sid] = data_end;
-  }
+  SID sid = num_slots;
+  num_slots++;
+  free_space -= sizeof(unsigned);
+
   // TODO: update record offset at the end of file
   data_end += size;
   free_space -= size;
@@ -49,50 +44,54 @@ void Page::dump(FileHandle &handle) {
 }
 
 void Page::parseMeta() {
-  // parse meta at the end of page
-  // the last int is slot_num, and previous slot_num int storage the size of each record
-  // -1 mean invalid (deleted)
-  unsigned *pt = (unsigned *) (data + PAGE_SIZE) - sizeof(unsigned) * 2;
-  int slot_num = *pt;
-  pt -= sizeof(short);
-  int data_offset = 0;
-  // scan record offsets from back to front
-  for (int i = 0; i < slot_num; ++i) {
-    if (*pt == -1) {
-      records_offset.push_back(-1);
-    } else {
-      records_offset.push_back(data_offset);
-      data_offset += *pt;
-    }
-    pt -= sizeof(short);
-  }
-  data_end = data_offset;
-  size_t meta_size = sizeof(unsigned) * (1 + records_offset.size());
-  free_space = PAGE_SIZE - data_offset - meta_size;
-}
-
-SID Page::findNextSlotID() {
-  for (int i = 0; i < records_offset.size(); ++i) {
-    if (records_offset[i] == -1) return i;
-  }
-  return records_offset.size();
+  unsigned *pt = (unsigned *) (data + PAGE_SIZE) - 1;
+  num_slots = *pt--;
+  free_space = *pt;
+//  int data_offset = 0;
+//  // scan record offsets from back to front
+//  for (int i = 0; i < num_slots; ++i) {
+//
+//    if (*pt == -1) {
+//      records_offset.push_back(-1);
+//    } else {
+//      records_offset.push_back(data_offset);
+//      data_offset += *pt;
+//    }
+//    --pt;
+//  }
+//  data_end = data_offset;
+//  size_t meta_size = sizeof(unsigned) * (1 + records_offset.size());
+//  free_space = PAGE_SIZE - data_offset - meta_size;
 }
 
 std::string Page::ToString() const {
   std::ostringstream oss;
   oss << "Page: " << pid << " free space:" << free_space << "\n";
-  for (int i = 0; i < records_offset.size(); ++i) {
-    oss << "\tRecord " << i << " offset " << records_offset[i] << "\n";
-  }
+//  for (int i = 0; i < records_offset.size(); ++i) {
+//    oss << "\tRecord " << i << " offset " << records_offset[i] << "\n";
+//  }
   return oss.str();
+}
+
+std::vector<std::pair<unsigned, RID>> Page::getRecordOffsets() {
+  std::vector<std::pair<unsigned, RID>> record_offsets;
+  unsigned *pt = (unsigned *) (data + PAGE_SIZE) - 3;
+  for (int i = 0; i < num_slots; i++) {
+    auto parsed = decodeDirectory(*pt);
+    record_offsets.push_back(parsed);
+    --pt;
+  }
+  return record_offsets;
 }
 
 void Page::initPage(char *page_data) {
   // assume page_data is PAGE_SIZE
-  *((int *) (page_data + PAGE_SIZE) - 1) = 0;
+  *((int *) (page_data + PAGE_SIZE) - 1) = PAGE_SIZE - 2 * sizeof(unsigned); // initial free_space
+  *((int *) (page_data + PAGE_SIZE) - 2) = 0; // initial num_slots
 }
 
-void Page::updateCounter(int counter) {
-  *((int *) (data + PAGE_SIZE) - 1) = counter;
+void Page::writeNumSlotAndFreeSpace() {
+  *((int *) (data + PAGE_SIZE) - 1) = free_space;
+  *((int *) (data + PAGE_SIZE) - 2) = num_slots;
 }
 
