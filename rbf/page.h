@@ -54,6 +54,23 @@ class Page {
 
   static void initPage(char *page_data);
 
+  static unsigned encodeRecordOffset(size_t offset, RID pointer);
+
+  static RID decodeRecordOffset(RID rid);
+
+
+  /**
+   * switch data beginning from begin forward by length
+   * @param begin
+   * @param length
+   * @return
+   */
+  RC switchFoward(size_t begin, size_t length);
+
+ private:
+
+  void updateCounter(int counter);
+
 };
 
 #endif //CS222_FALL19_PAGE_H

@@ -30,7 +30,7 @@ RC RecordBasedFileManager::openFile(const std::string &fileName, FileHandle &fil
   RC ret = pfm_->openFile(fileName, fileHandle);
   if (!ret) {
     // init the RBFM
-    PID page_num = fileHandle.appendPageCounter;
+    PID page_num = fileHandle.getNumberOfPages();
     for (PID i = 0; i < page_num; ++i) {
       loadNextPage(fileHandle);
     }
@@ -39,6 +39,9 @@ RC RecordBasedFileManager::openFile(const std::string &fileName, FileHandle &fil
 }
 
 RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
+  for (auto page : pages_) {
+    page->dump(fileHandle);
+  }
   return pfm_->closeFile(fileHandle);
 }
 
@@ -149,7 +152,7 @@ RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescrip
   std::vector<char> decoded_data(offset, 0);
   size_t real_data_size = offset - directoryOverheadLength(fields_num);
   memcpy(decoded_data.data(), directories.data(), sizeof(directory_entry) * directories.size());
-  memcpy(decoded_data.data() + sizeof(directory_entry) * directories.size(), real_data, real_data_size)
+  memcpy(decoded_data.data() + sizeof(directory_entry) * directories.size(), real_data, real_data_size);
 
   return decoded_data;
 }

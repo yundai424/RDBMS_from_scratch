@@ -33,6 +33,7 @@ RID Page::insertData(const char *new_data, size_t size) {
     // use previous deleted slot
     records_offset[sid] = data_end;
   }
+  // TODO: update record offset at the end of file
   data_end += size;
   free_space -= size;
   return {pid, sid};
@@ -51,10 +52,11 @@ void Page::parseMeta() {
   // parse meta at the end of page
   // the last int is slot_num, and previous slot_num int storage the size of each record
   // -1 mean invalid (deleted)
-  int *pt = (int *) (data + PAGE_SIZE) - 1;
+  unsigned *pt = (unsigned *) (data + PAGE_SIZE) - sizeof(unsigned) * 2;
   int slot_num = *pt;
-  pt -= slot_num;
+  pt -= sizeof(short);
   int data_offset = 0;
+  // scan record offsets from back to front
   for (int i = 0; i < slot_num; ++i) {
     if (*pt == -1) {
       records_offset.push_back(-1);
@@ -62,7 +64,7 @@ void Page::parseMeta() {
       records_offset.push_back(data_offset);
       data_offset += *pt;
     }
-    ++pt;
+    pt -= sizeof(short);
   }
   data_end = data_offset;
   size_t meta_size = sizeof(unsigned) * (1 + records_offset.size());
@@ -88,5 +90,9 @@ std::string Page::ToString() const {
 void Page::initPage(char *page_data) {
   // assume page_data is PAGE_SIZE
   *((int *) (page_data + PAGE_SIZE) - 1) = 0;
+}
+
+void Page::updateCounter(int counter) {
+  *((int *) (data + PAGE_SIZE) - 1) = counter;
 }
 
