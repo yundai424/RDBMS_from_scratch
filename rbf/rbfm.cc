@@ -111,7 +111,7 @@ void RecordBasedFileManager::appendNewPage(FileHandle &file_handle) {
   loadNextPage(file_handle);
 }
 
-vector<char>
+std::vector<char>
 RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescriptor,
                                      const void *data) {
   // parse null indicators
@@ -149,7 +149,7 @@ RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescrip
   std::vector<char> decoded_data(offset, 0);
   size_t real_data_size = offset - directoryOverheadLength(fields_num);
   memcpy(decoded_data.data(), directories.data(), sizeof(directory_entry) * directories.size());
-  memcpy(decoded_data.data() + sizeof(directory_entry) * directories.size(), real_data, real_data_size)
+  memcpy(decoded_data.data() + sizeof(directory_entry) * directories.size(), real_data, real_data_size);
 
   return decoded_data;
 }
