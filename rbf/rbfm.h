@@ -23,6 +23,8 @@
 //  rbfmScanIterator.close();
 
 class RBFM_ScanIterator {
+  friend class Page;
+
  public:
   RBFM_ScanIterator() = default;;
 
@@ -126,21 +128,30 @@ class RecordBasedFileManager {
    */
   void appendNewPage(FileHandle &file_handle);
 
+  Page *findAvailableSlot(size_t size, FileHandle &file_handle);
+
+  void rearrange(FreeSlot &slot, size_t total_size);
+
+  static inline directory_t entryDirectoryOverheadLength(int fields_num) {
+    return sizeof(directory_t) * (fields_num + 1);
+  }
+
+ public:
 
   /**
-   * decode data to std::vector<char> which is ready to be inserted into page
+   * encode raw data to std::vector<char> which is ready to be inserted into page
    * @param recordDescriptor
    * @param data
    * @return
    */
-  std::vector<char> decodeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
+  static std::vector<char> encodeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
 
-  Page *findAvailableSlot(size_t size, FileHandle &file_handle);
-  void rearrange(FreeSlot &slot, size_t total_size);
-
-  static inline unsigned directoryOverheadLength(int fields_num) {
-    return sizeof(directory_entry) * (fields_num + 1);
-  }
+  /**
+   * decode data from record on page
+   * @param out
+   * @param src
+   */
+  static void decodeRecord(void *out, const char *src);
 
 };
 

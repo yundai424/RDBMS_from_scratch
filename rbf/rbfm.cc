@@ -49,17 +49,21 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
                                         const void *data, RID &rid) {
   // use the array of field offsets method for variable length record introduced in class as the format of record
   // each record has a leading series of bytes indicating the pointers to each field
-  auto data_to_be_inserted = decodeRecord(recordDescriptor, data);
+  auto data_to_be_inserted = encodeRecord(recordDescriptor, data);
   size_t total_size = data_to_be_inserted.size();
 
-  const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 2;
+  const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 3;
   if (total_size > MAX_SIZE) {
     DB_ERROR << "data size " << total_size << " larger than MAX_SIZE " << MAX_SIZE;
     return -1;
   }
 
   Page *page = findAvailableSlot(total_size, fileHandle);
+
+  page->load(fileHandle);
   rid = page->insertData(data_to_be_inserted.data(), data_to_be_inserted.size());
+  page->dump(fileHandle);
+
   free_slots_[page->free_space].insert(page);
 
   return 0;
@@ -67,7 +71,23 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
 
 RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                       const RID &rid, void *data) {
-  return -1;
+  // TODO : seems that recordDescriptor has nothing to do here
+  Page *p = pages_[rid.pageNum].get();
+  p->load(fileHandle);
+  auto &record_offset = p->records_offset[rid.slotNum];
+  if (record_offset.first == p->pid) {
+    // in same page
+    p->readData(record_offset.second, data);
+  } else {
+    // redirect to another page
+    Page *redirect_p = pages_[record_offset.first].get();
+    redirect_p->load(fileHandle);
+    redirect_p->readData(record_offset.second, data);
+    redirect_p->freeMem();
+  }
+  p->freeMem();
+
+  return 0;
 }
 
 RC RecordBasedFileManager::printRecord(const std::vector<Attribute> &recordDescriptor, const void *data) {
@@ -115,7 +135,7 @@ void RecordBasedFileManager::appendNewPage(FileHandle &file_handle) {
 }
 
 std::vector<char>
-RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescriptor,
+RecordBasedFileManager::encodeRecord(const std::vector<Attribute> &recordDescriptor,
                                      const void *data) {
   // parse null indicators
   std::vector<bool> null_indicators;
@@ -138,9 +158,9 @@ RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescrip
   // create directories: "array of field offsets"
   // the first element in the array indicates the number of fields in this record
   // then the following elements indicate the END of records instead of head
-  std::vector<directory_entry> directories;
+  std::vector<directory_t> directories;
   directories.push_back(fields_num);
-  unsigned offset = directoryOverheadLength(fields_num); // offset from the head of formatted record
+  directory_t offset = entryDirectoryOverheadLength(fields_num); // offset from the head of formatted record
   for (int i = 0; i < fields_num; ++i) {
     if (null_indicators[i]) {
       directories.push_back(-1); // -1 to indicate null
@@ -150,11 +170,22 @@ RecordBasedFileManager::decodeRecord(const std::vector<Attribute> &recordDescrip
     }
   }
   std::vector<char> decoded_data(offset, 0);
-  size_t real_data_size = offset - directoryOverheadLength(fields_num);
-  memcpy(decoded_data.data(), directories.data(), sizeof(directory_entry) * directories.size());
-  memcpy(decoded_data.data() + sizeof(directory_entry) * directories.size(), real_data, real_data_size);
+  size_t real_data_size = offset - entryDirectoryOverheadLength(fields_num);
+  memcpy(decoded_data.data(), directories.data(), sizeof(directory_t) * directories.size());
+  memcpy(decoded_data.data() + sizeof(directory_t) * directories.size(), real_data, real_data_size);
 
   return decoded_data;
+}
+
+void RecordBasedFileManager::decodeRecord(void *out, const char *src) {
+  directory_t *pt = (directory_t *) out;
+  directory_t field_num = *pt++;
+  size_t size = 0;
+  // notice that some field might be empty
+  for (unsigned i = 0; i < field_num; ++i) {
+    size = std::max(size, size_t(*pt++));
+  }
+  memcpy(out, src, size);
 }
 
 Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_handle) {

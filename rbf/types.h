@@ -7,7 +7,8 @@
 /**
  * ========= typedefs and shared structs ===========
  */
-typedef short directory_entry;
+typedef short directory_t;
+static directory_t MAX_FIELD_NUM = INT16_MAX;
 
 typedef unsigned PageNum;
 typedef int RC;
