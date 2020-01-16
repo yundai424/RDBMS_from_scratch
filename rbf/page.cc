@@ -4,7 +4,7 @@
 #include "pfm.h"
 #include "rbfm.h"
 
-Page::Page(PID page_id) : pid(page_id) {}
+Page::Page(PID page_id) : pid(page_id), data(nullptr) {}
 
 Page::~Page() {
   if (data) freeMem();
