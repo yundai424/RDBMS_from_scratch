@@ -7,7 +7,7 @@
 /**
  * ========= typedefs and shared structs ===========
  */
-typedef short directory_t;
+typedef short directory_t; // directories before real data, to indicate offset for each field
 static directory_t MAX_FIELD_NUM = INT16_MAX;
 
 typedef unsigned PageNum;

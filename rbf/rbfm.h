@@ -136,6 +136,8 @@ class RecordBasedFileManager {
     return sizeof(directory_t) * (fields_num + 1);
   }
 
+  static std::vector<bool> parseNullIndicator(const unsigned char * data, unsigned fields_num);
+
  public:
 
   /**
@@ -144,14 +146,17 @@ class RecordBasedFileManager {
    * @param data
    * @return
    */
-  static std::vector<char> deserializeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
+  static std::vector<char> serializeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
 
   /**
    * decode data from record on page
+   * @param recordDescriptor
    * @param out
    * @param src
    */
-  static void serializeRecord(void *out, const char *src);
+  static void deserializeRecord(const std::vector<Attribute> &recordDescriptor, void *out, const char *src);
+
+
 
 };
 
