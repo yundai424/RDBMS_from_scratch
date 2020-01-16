@@ -40,7 +40,7 @@ RID Page::insertData(const char *new_data, size_t size) {
 }
 
 void Page::readData(PageOffset offset, void *out) {
-  RecordBasedFileManager::decodeRecord(out, data + offset);
+  RecordBasedFileManager::serializeRecord(out, data + offset);
 }
 
 void Page::dump(FileHandle &handle) {
@@ -96,26 +96,8 @@ std::string Page::ToString() const {
   return oss.str();
 }
 
-//vector<pair<unsigned, unsigned>> Page::getRecordOffsets() const {
-//  std::vector<std::pair<unsigned, unsigned >> record_offsets;
-//  unsigned *pt = (unsigned *) (data + PAGE_SIZE) - 3;
-//  for (int i = 0; i < num_slots; i++) {
-//    auto parsed = decodeDirectory(*pt);
-//    record_offsets.push_back(parsed);
-//    --pt;
-//  }
-//  return record_offsets;
-//}
-
 void Page::initPage(char *page_data) {
   // assume page_data is PAGE_SIZE
   *((int *) (page_data + PAGE_SIZE) - 1) = PAGE_SIZE - 3 * sizeof(unsigned); // initial free_space
   *((int *) (page_data + PAGE_SIZE) - 2) = 0; // initial num_slots
 }
-
-void Page::writeNumSlotAndFreeSpace() {
-  *((int *) (data + PAGE_SIZE) - 1) = free_space;
-  *((int *) (data + PAGE_SIZE) - 2) = num_slots;
-}
-
-

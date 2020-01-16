@@ -144,14 +144,14 @@ class RecordBasedFileManager {
    * @param data
    * @return
    */
-  static std::vector<char> encodeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
+  static std::vector<char> deserializeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
 
   /**
    * decode data from record on page
    * @param out
    * @param src
    */
-  static void decodeRecord(void *out, const char *src);
+  static void serializeRecord(void *out, const char *src);
 
 };
 

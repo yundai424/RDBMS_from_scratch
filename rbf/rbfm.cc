@@ -49,17 +49,15 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
                                         const void *data, RID &rid) {
   // use the array of field offsets method for variable length record introduced in class as the format of record
   // each record has a leading series of bytes indicating the pointers to each field
-  auto data_to_be_inserted = encodeRecord(recordDescriptor, data);
+  auto data_to_be_inserted = deserializeRecord(recordDescriptor, data);
   size_t total_size = data_to_be_inserted.size();
-
-  const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 3;
+  const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 2;
   if (total_size > MAX_SIZE) {
     DB_ERROR << "data size " << total_size << " larger than MAX_SIZE " << MAX_SIZE;
     return -1;
   }
 
   Page *page = findAvailableSlot(total_size, fileHandle);
-
   page->load(fileHandle);
   rid = page->insertData(data_to_be_inserted.data(), data_to_be_inserted.size());
   page->dump(fileHandle);
@@ -121,8 +119,11 @@ RC RecordBasedFileManager::scan(FileHandle &fileHandle, const std::vector<Attrib
 
 
 void RecordBasedFileManager::loadNextPage(FileHandle &fileHandle) {
+  // construct a Page object, read page to buffer, parse meta in corresponding data to initialize in-memory variables,
+  //   then free buffer up
   std::shared_ptr<Page> cur_page = std::make_shared<Page>(pages_.size());
-  cur_page->load(fileHandle);
+  cur_page->load(fileHandle); // load and parse
+  cur_page->freeMem();
   free_slots_[cur_page->free_space].insert(cur_page.get());
   pages_.push_back(cur_page);
 }
@@ -135,8 +136,8 @@ void RecordBasedFileManager::appendNewPage(FileHandle &file_handle) {
 }
 
 std::vector<char>
-RecordBasedFileManager::encodeRecord(const std::vector<Attribute> &recordDescriptor,
-                                     const void *data) {
+RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recordDescriptor,
+                                          const void *data) {
   // parse null indicators
   std::vector<bool> null_indicators;
   int fields_num = recordDescriptor.size();
@@ -159,25 +160,33 @@ RecordBasedFileManager::encodeRecord(const std::vector<Attribute> &recordDescrip
   // the first element in the array indicates the number of fields in this record
   // then the following elements indicate the END of records instead of head
   std::vector<directory_t> directories;
-  directories.push_back(fields_num);
-  directory_t offset = entryDirectoryOverheadLength(fields_num); // offset from the head of formatted record
+  directory_t offset = sizeof(directory_t) * fields_num; // offset from the head of encoded record
+  int raw_offset = indicator_bytes_num;
   for (int i = 0; i < fields_num; ++i) {
-    if (null_indicators[i]) {
-      directories.push_back(-1); // -1 to indicate null
-    } else {
-      offset += recordDescriptor[i].length;
-      directories.push_back(offset);
+    // when a field is NULL, the directory just points to the end of the previous record,
+    //    which means this field has 0 length -> a NULL field
+    if (!null_indicators[i]) {
+      if (recordDescriptor[i].type == TypeVarChar) {
+        int char_len;
+        memcpy(&char_len, (unsigned char *) data + raw_offset, sizeof(int));
+        offset += char_len;
+        raw_offset += char_len;
+      } else {
+        offset += recordDescriptor[i].length;
+        raw_offset += recordDescriptor[i].length;
+      }
     }
+    directories.push_back(offset);
   }
   std::vector<char> decoded_data(offset, 0);
-  size_t real_data_size = offset - entryDirectoryOverheadLength(fields_num);
+  size_t real_data_size = offset - sizeof(directory_t) * fields_num;
   memcpy(decoded_data.data(), directories.data(), sizeof(directory_t) * directories.size());
   memcpy(decoded_data.data() + sizeof(directory_t) * directories.size(), real_data, real_data_size);
 
   return decoded_data;
 }
 
-void RecordBasedFileManager::decodeRecord(void *out, const char *src) {
+void RecordBasedFileManager::serializeRecord(void *out, const char *src) {
   directory_t *pt = (directory_t *) out;
   directory_t field_num = *pt++;
   size_t size = 0;

@@ -80,12 +80,16 @@ class Page {
 
   static inline std::pair<PID, PageOffset> decodeDirectory(unsigned directory) {
     // high 20 bit represent page num, low 12 bit represent offset in page
+    unsigned first = (directory & 0xfffff000) >> 12; // first 20 bits
+    //TODO: consider the case of forwarding pointer
+
     return {(directory & 0xfffff000) >> 12, directory & 0xfff};
   }
 
   static inline unsigned encodeDirectory(std::pair<PID, PageOffset> page_offset) {
+    //TODO: consider the case of forwarding pointer
     static const unsigned MAX_PID = 0xfffff;
-    if (page_offset.first > MAX_PID) {
+    if (page_offset.first > MAX_PID) { // exceed 16 bits
       DB_ERROR << "Page id " << page_offset.first << " larger than 0xFFFFF";
       throw std::runtime_error("Page id overflow");
     }
