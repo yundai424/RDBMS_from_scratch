@@ -51,7 +51,7 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
   // each record has a leading series of bytes indicating the pointers to each field
   auto data_to_be_inserted = deserializeRecord(recordDescriptor, data);
   size_t total_size = data_to_be_inserted.size();
-  const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 2;
+  const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 3;
   if (total_size > MAX_SIZE) {
     DB_ERROR << "data size " << total_size << " larger than MAX_SIZE " << MAX_SIZE;
     return -1;
@@ -70,12 +70,23 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
 RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                       const RID &rid, void *data) {
   // TODO : seems that recordDescriptor has nothing to do here
+  if (rid.pageNum >= fileHandle.getNumberOfPages()) {
+    DB_DEBUG << "RID NOT EXIST";
+    return -1;
+  }
+
   Page *p = pages_[rid.pageNum].get();
   p->load(fileHandle);
+  if (rid.slotNum >= p->records_offset.size()) {
+    DB_DEBUG << "RID NOT EXIST";
+    p->freeMem();
+    return -1;
+  }
+
   auto &record_offset = p->records_offset[rid.slotNum];
   if (record_offset.first == p->pid) {
     // in same page
-    p->readData(record_offset.second, data);
+    p->readData(record_offset.second, data, recordDescriptor);
   } else {
     // redirect to another page
     Page *redirect_p = pages_[record_offset.first].get();
@@ -163,8 +174,7 @@ RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recordDe
   directory_t offset = sizeof(directory_t) * fields_num; // offset from the head of encoded record
   int raw_offset = indicator_bytes_num;
   for (int i = 0; i < fields_num; ++i) {
-    // when a field is NULL, the directory just points to the end of the previous record,
-    //    which means this field has 0 length -> a NULL field
+    // when a field is NULL, the directory has value of -1
     if (!null_indicators[i]) {
       if (recordDescriptor[i].type == TypeVarChar) {
         int char_len;
@@ -175,8 +185,10 @@ RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recordDe
         offset += recordDescriptor[i].length;
         raw_offset += recordDescriptor[i].length;
       }
+      directories.push_back(offset);
+    } else {
+      directories.push_back(-1);
     }
-    directories.push_back(offset);
   }
   std::vector<char> decoded_data(offset, 0);
   size_t real_data_size = offset - sizeof(directory_t) * fields_num;

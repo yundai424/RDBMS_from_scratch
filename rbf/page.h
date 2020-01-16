@@ -48,7 +48,7 @@ class Page {
 
   RID insertData(const char *new_data, size_t size);
 
-  void readData(PageOffset offset, void *out);
+  void readData(PageOffset page_offset, void *out, const std::vector<Attribute> &recordDescriptor);
 
 
   std::string ToString() const;

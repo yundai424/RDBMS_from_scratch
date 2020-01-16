@@ -39,8 +39,25 @@ RID Page::insertData(const char *new_data, size_t size) {
   return {pid, sid};
 }
 
-void Page::readData(PageOffset offset, void *out) {
-  RecordBasedFileManager::serializeRecord(out, data + offset);
+void Page::readData(PageOffset page_offset, void *out, const std::vector<Attribute> &recordDescriptor) {
+  int offset = 0;
+  int indicator_bytes_num = int(ceil(double(recordDescriptor.size()) / 8));
+  // 1. make null indicator
+  unsigned char indicator_bytes[indicator_bytes_num];
+  unsigned char *pt = indicator_bytes;
+  for (int i = 0; i < recordDescriptor.size(); i++) {
+    if (records_offset[i].second == -1) {
+      unsigned char mask = 1;
+      mask = mask << (i % 8);
+      *pt = *pt | mask;
+    }
+    if (i % 8 == 7) ++pt;
+  }
+  memcpy(out, indicator_bytes, indicator_bytes_num);
+
+  // TODO: 2. write data
+
+
 }
 
 void Page::dump(FileHandle &handle) {
@@ -61,6 +78,7 @@ void Page::parseMeta() {
   unsigned num_slots = *pt--;
   int data_offset = 0;
   // scan record offsets from back to front
+  records_offset.clear();
   for (int i = 0; i < num_slots; ++i) {
     records_offset.push_back(decodeDirectory(*pt--));
     if (records_offset.back().second != INVALID_OFFSET)
