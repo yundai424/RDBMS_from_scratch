@@ -4,7 +4,7 @@
 #include "pfm.h"
 #include "rbfm.h"
 
-Page::Page(PID page_id) : pid(page_id), data(nullptr) {}
+Page::Page(PID page_id) : pid(page_id), data(nullptr), data_end(0) {}
 
 Page::~Page() {
   if (data) freeMem();
@@ -22,6 +22,7 @@ void Page::freeMem() {
 }
 
 RID Page::insertData(const char *new_data, size_t size) {
+  DB_DEBUG << "inserting size " << size << " at " << data_end << " of page " <<pid;
   memcpy(data + data_end, new_data, size);
 
   SID sid = findNextSlotID();

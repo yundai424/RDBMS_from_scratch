@@ -50,6 +50,7 @@ int RBFTest_10(RecordBasedFileManager &rbfm) {
         ridsFileRead.close();
     }
 
+    DB_DEBUG << rids.size() << " " << numRecords;
     assert(rids.size() == (unsigned) numRecords && "Reading records should not fail.");
 
     // Read sizes vector from the disk - do not use this code in your codebase. This is not a PAGE-BASED operation - for the test purpose only.

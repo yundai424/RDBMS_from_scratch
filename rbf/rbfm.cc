@@ -51,6 +51,7 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
                                         const void *data, RID &rid) {
   // use the array of field offsets method for variable length record introduced in class as the format of record
   // each record has a leading series of bytes indicating the pointers to each field
+  if (!total_num_fields_) total_num_fields_ = recordDescriptor.size();
   auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
   size_t total_size = data_to_be_inserted.size();
   const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 3;
@@ -110,7 +111,7 @@ RC RecordBasedFileManager::printRecord(const std::vector<Attribute> &recordDescr
   const char *real_data = ((char *) data) + indicator_bytes_num;
 
   for (int i = 0; i < recordDescriptor.size(); ++i) {
-    std::cout << "field " << i << "\t" << recordDescriptor[i].name << ":";
+    std::cout << recordDescriptor[i].name << ": ";
     if (null_indicators[i]) std::cout << "NULL";
     else {
       if (recordDescriptor[i].type == AttrType::TypeInt) {
@@ -126,15 +127,15 @@ RC RecordBasedFileManager::printRecord(const std::vector<Attribute> &recordDescr
         int char_len = *((int *) (real_data));
         real_data += sizeof(int);
         char str[char_len + 1];
-        for (int i = 0; i < char_len + 1; ++i)str[i] = 0;
+        for (int k = 0; k < char_len + 1; ++k) str[k] = 0;
         memcpy(str, real_data, char_len);
         real_data += char_len;
         std::cout << str;
       }
     }
-    std::cout << endl;
-
+    std::cout << " ";
   }
+  std::cout << std::endl;
   return 0;
 }
 
@@ -248,7 +249,6 @@ void RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &rec
   unsigned char indicator_bytes[indicator_bytes_num];
   memset(indicator_bytes, 0, indicator_bytes_num);
   unsigned char *pt = indicator_bytes;
-
   directory_t *dir_pt = (directory_t *) src;
   directory_t field_num = *dir_pt++;
   if (field_num != recordDescriptor.size()) {
@@ -270,8 +270,8 @@ void RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &rec
   char *out_pt = (char *) out;
   out_pt += indicator_bytes_num;
 
-  // TODO: 2. write data
-  size_t directory_size = sizeof(directory_t) * (field_num + 1);
+  // 2. write data
+  size_t directory_size = entryDirectoryOverheadLength(field_num);
   src += directory_size; // begin of real data
   size_t prev_offset = directory_size;
   for (int i = 0; i < fields_offset.size(); ++i) {
@@ -290,10 +290,10 @@ void RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &rec
 Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_handle) {
   // find the first available free slot to insert data
   // will also handle creating new page / new slot when there's no available one
-  auto it = free_slots_.lower_bound(size); // greater or equal
+  auto it = free_slots_.lower_bound(size + sizeof(unsigned)); // greater or equal
   if (it == free_slots_.end()) {
     appendNewPage(file_handle);
-    it = free_slots_.lower_bound(size);
+    it = free_slots_.lower_bound(size + sizeof(unsigned));
   }
   auto &available_pages = it->second;
   Page *res = *available_pages.begin();

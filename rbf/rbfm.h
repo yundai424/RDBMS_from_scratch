@@ -110,6 +110,7 @@ class RecordBasedFileManager {
   RecordBasedFileManager &operator=(const RecordBasedFileManager &);          // Prevent assignment
 
  private:
+  int total_num_fields_;
   static RecordBasedFileManager *_rbf_manager;
 
   PagedFileManager *pfm_;
