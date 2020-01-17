@@ -6,9 +6,9 @@
 #include <memory>
 #include <map>
 #include <unordered_set>
-#include <fstream>
+//#include <fstream>
 #include <vector>
-#include <string>
+//#include <string>
 #include <iostream>
 #include <ostream>
 #include <sstream>
@@ -110,7 +110,7 @@ class Page {
 
   void readData(PageOffset page_offset, void *out, const std::vector<Attribute> &recordDescriptor);
 
-  std::string ToString() const;
+//  std::string ToString() const;
 
   static void initPage(char *page_data);
 

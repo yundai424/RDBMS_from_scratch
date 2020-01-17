@@ -416,14 +416,14 @@ void Page::dumpMeta() {
   }
 }
 
-std::string Page::ToString() const {
-  std::ostringstream oss;
-  oss << "Page: " << pid << " free space:" << free_space << " real free space " << real_free_space_ << "\n";
-  for (int i = 0; i < records_offset.size(); ++i) {
-    oss << "\tRecord " << i << " offset " << records_offset[i].first << "," << records_offset[i].second << "\n";
-  }
-  return oss.str();
-}
+//std::string Page::ToString() const {
+//  std::ostringstream oss;
+//  oss << "Page: " << pid << " free space:" << free_space << " real free space " << real_free_space_ << "\n";
+//  for (int i = 0; i < records_offset.size(); ++i) {
+//    oss << "\tRecord " << i << " offset " << records_offset[i].first << "," << records_offset[i].second << "\n";
+//  }
+//  return oss.str();
+//}
 
 void Page::initPage(char *page_data) {
   // assume page_data is PAGE_SIZE
