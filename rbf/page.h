@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <vector>
+#include <unordered_set>
 
 #include "types.h"
 #include "logger.h"
@@ -26,15 +27,21 @@ struct FreeSlot {
 };
 
 class Page {
-
+friend class RecordBasedFileManager;
   size_t data_end;
   char *data;
+  size_t real_free_space_;
+  std::unordered_set<SID> invalid_slots_;
 
  public:
 
   PID pid;
-  size_t free_space; // free_space = real_free_space - sizeof(unsigned), for meta
-  std::vector<std::pair<PID, PageOffset >> records_offset; // offset, could be negative (4095 means invalid)
+  /*
+   * free_space = real_free_space_                (there're deleted directory we can reuse,)
+   * free_space = real_free_space_ - sizeof(int)  (all offset directories are full)
+   */
+  size_t free_space;
+  std::vector<std::pair<PID, PageOffset >> records_offset; // offset (4095 means invalid)
 
   explicit Page(PID page_id);
 
@@ -49,7 +56,6 @@ class Page {
   RID insertData(const char *new_data, size_t size);
 
   void readData(PageOffset page_offset, void *out, const std::vector<Attribute> &recordDescriptor);
-
 
   std::string ToString() const;
 
@@ -74,28 +80,46 @@ class Page {
 
   void dumpMeta();
 
-  SID findNextSlotID() const;
+  void checkDataend(); // for debug
 
-  void writeNumSlotAndFreeSpace();
+  inline SID findNextSlotID();
 
-  static inline std::pair<PID, PageOffset> decodeDirectory(unsigned directory) {
-    // high 20 bit represent page num, low 12 bit represent offset in page
-    unsigned first = (directory & 0xfffff000) >> 12; // first 20 bits
-    //TODO: consider the case of forwarding pointer
+  inline void maintainFreeSpace();
 
-    return {(directory & 0xfffff000) >> 12, directory & 0xfff};
-  }
+  static inline std::pair<PID, PageOffset> decodeDirectory(unsigned directory);
 
-  static inline unsigned encodeDirectory(std::pair<PID, PageOffset> page_offset) {
-    //TODO: consider the case of forwarding pointer
-    static const unsigned MAX_PID = 0xfffff;
-    if (page_offset.first > MAX_PID) { // exceed 16 bits
-      DB_ERROR << "Page id " << page_offset.first << " larger than 0xFFFFF";
-      throw std::runtime_error("Page id overflow");
-    }
-    return (page_offset.first << 12) + page_offset.second;
-  }
+  static inline unsigned encodeDirectory(std::pair<PID, PageOffset> page_offset);
 
 };
+
+
+SID Page::findNextSlotID() {
+  if (invalid_slots_.empty()) return records_offset.size();
+  SID ret = *invalid_slots_.begin();
+  invalid_slots_.erase(invalid_slots_.begin());
+  return ret;
+}
+
+void Page::maintainFreeSpace() {
+  free_space = invalid_slots_.empty() ? real_free_space_ - sizeof(int) : real_free_space_;
+}
+
+std::pair<PID, PageOffset> Page::decodeDirectory(unsigned directory) {
+  // high 20 bit represent page num, low 12 bit represent offset in page
+  unsigned first = (directory & 0xfffff000) >> 12; // first 20 bits
+  //TODO: consider the case of forwarding pointer
+
+  return {(directory & 0xfffff000) >> 12, directory & 0xfff};
+}
+
+unsigned Page::encodeDirectory(std::pair<PID, PageOffset> page_offset) {
+  //TODO: consider the case of forwarding pointer
+  static const unsigned MAX_PID = 0xfffff;
+  if (page_offset.first > MAX_PID) { // exceed 16 bits
+    DB_ERROR << "Page id " << page_offset.first << " larger than 0xFFFFF";
+    throw std::runtime_error("Page id overflow");
+  }
+  return (page_offset.first << 12) + page_offset.second;
+}
 
 #endif //CS222_FALL19_PAGE_H

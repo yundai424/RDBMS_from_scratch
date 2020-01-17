@@ -89,7 +89,6 @@ ostream &operator<<(ostream &os, const vector<T> &v) {
   return os;
 }
 
-#define DB_TRACE Logger(LogLevel::TRACE, __FILE__, __LINE__, __FUNCTION__)
 #define DB_DEBUG Logger(LogLevel::DEBUGGING, __FILE__, __LINE__, __FUNCTION__)
 #define DB_INFO Logger(::LogLevel::INFO, __FILE__, __LINE__, __FUNCTION__)
 #define DB_WARNING Logger(::LogLevel::WARNING, __FILE__, __LINE__, __FUNCTION__)

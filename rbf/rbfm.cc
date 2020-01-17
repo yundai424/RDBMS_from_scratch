@@ -44,16 +44,18 @@ RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
 //  for (auto page : pages_) {
 //    page->dump(fileHandle);
 //  }
+
   return pfm_->closeFile(fileHandle);
 }
 
 RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const void *data, RID &rid) {
+//  DB_INFO << "Insert data";
   // use the array of field offsets method for variable length record introduced in class as the format of record
   // each record has a leading series of bytes indicating the pointers to each field
-  if (!total_num_fields_) total_num_fields_ = recordDescriptor.size();
   auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
   size_t total_size = data_to_be_inserted.size();
+//  DB_DEBUG << "TOTAL SIZE " << total_size;
   const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 3;
   if (total_size > MAX_SIZE) {
     DB_ERROR << "data size " << total_size << " larger than MAX_SIZE " << MAX_SIZE;
@@ -67,11 +69,16 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
 
   free_slots_[page->free_space].insert(page);
 
+  pages_[0]->load(fileHandle);
+//  DB_DEBUG << print_bytes(pages_[0]->data + 62, 150);
+  pages_[0]->dump(fileHandle);
+
   return 0;
 }
 
 RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                       const RID &rid, void *data) {
+
   if (rid.pageNum >= fileHandle.getNumberOfPages()) {
     DB_DEBUG << "RID NOT EXIST";
     return -1;
@@ -232,9 +239,11 @@ RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDesc
     }
   }
   std::vector<char> decoded_data(offset, 0);
-  size_t real_data_size = offset - sizeof(directory_t) * directories.size();
-  memcpy(decoded_data.data(), directories.data(), sizeof(directory_t) * directories.size());
-  memcpy(decoded_data.data() + sizeof(directory_t) * directories.size(), real_data, real_data_size);
+  size_t directory_size = sizeof(directory_t) * directories.size();
+  size_t real_data_size = offset - directory_size;
+//  DB_DEBUG << "directory bytes " << directory_size << " real data size " << real_data_size;
+  memcpy(decoded_data.data(), directories.data(), directory_size);
+  memcpy(decoded_data.data() + directory_size, real_data, real_data_size);
 
   return decoded_data;
 }

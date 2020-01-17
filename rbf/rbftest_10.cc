@@ -50,7 +50,6 @@ int RBFTest_10(RecordBasedFileManager &rbfm) {
         ridsFileRead.close();
     }
 
-    DB_DEBUG << rids.size() << " " << numRecords;
     assert(rids.size() == (unsigned) numRecords && "Reading records should not fail.");
 
     // Read sizes vector from the disk - do not use this code in your codebase. This is not a PAGE-BASED operation - for the test purpose only.
@@ -69,7 +68,6 @@ int RBFTest_10(RecordBasedFileManager &rbfm) {
         }
         sizesFileRead.close();
     }
-
     assert(sizes.size() == (unsigned) numRecords && "Reading records should not fail.");
 
     // NULL field indicator
@@ -86,10 +84,13 @@ int RBFTest_10(RecordBasedFileManager &rbfm) {
         if (i % 1000 == 0) {
             std::cout << std::endl << "Returned Data:" << std::endl;
             rbfm.printRecord(recordDescriptor, returnedData);
+
         }
 
         int size = 0;
         prepareLargeRecord(recordDescriptor.size(), nullsIndicator, i, record, &size);
+
+
         if (memcmp(returnedData, record, sizes[i]) != 0) {
             std::cout << "[FAIL] Test Case 10 Failed!" << std::endl << std::endl;
             free(nullsIndicator);
