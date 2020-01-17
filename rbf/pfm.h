@@ -63,9 +63,9 @@ class FileHandle {
 
  private:
   static inline size_t getPos(PageNum page_num) {
-    return OFFSET + page_num * PAGE_SIZE;
+    return (page_num + 1) * PAGE_SIZE;
   }
-  static constexpr size_t OFFSET = 3 * sizeof(unsigned);
+
   std::fstream _file;
 };
 
