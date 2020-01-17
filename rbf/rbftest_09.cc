@@ -27,6 +27,7 @@ int RBFTest_9(RecordBasedFileManager &rbfm, std::vector<RID> &rids, std::vector<
 
     RID rid;
     void *record = malloc(1000);
+    void *returned_record = malloc(1000);
     int numRecords = 2000;
 
     std::vector<Attribute> recordDescriptor;

@@ -242,7 +242,6 @@ RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDesc
 void RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recordDescriptor,
                                                void *out,
                                                const char *src) {
-//  DB_DEBUG << print_bytes(src,34);
 
   // 1. make null indicator
   int indicator_bytes_num = int(ceil(double(recordDescriptor.size()) / 8));

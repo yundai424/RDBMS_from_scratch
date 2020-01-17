@@ -22,7 +22,6 @@ void Page::freeMem() {
 }
 
 RID Page::insertData(const char *new_data, size_t size) {
-  DB_DEBUG << "inserting size " << size << " at " << data_end << " of page " <<pid;
   memcpy(data + data_end, new_data, size);
 
   SID sid = findNextSlotID();
@@ -34,7 +33,6 @@ RID Page::insertData(const char *new_data, size_t size) {
     // use previous deleted slot
     records_offset[sid] = {pid, data_end};
   }
-
   data_end += size;
   free_space -= size;
   return {pid, sid};
@@ -65,10 +63,11 @@ void Page::parseMeta() {
   records_offset.clear();
   for (int i = 0; i < num_slots; ++i) {
     records_offset.push_back(decodeDirectory(*pt--));
-    if (records_offset.back().second != INVALID_OFFSET)
-      data_offset += records_offset.back().second;
+    if (records_offset.back().second != INVALID_OFFSET) {
+      data_offset = records_offset.back().second;
+    }
   }
-  data_end = data_offset;
+  data_end = PAGE_SIZE - (num_slots + 3) * sizeof(unsigned) - free_space;
 }
 
 void Page::dumpMeta() {
