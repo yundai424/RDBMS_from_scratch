@@ -1,15 +1,21 @@
 1. Basic information
-Team #:
-Github Repo Link:
-Student 1 UCI NetID:
-Student 1 Name:
+Team #: 12
+Github Repo Link: https://github.com/UCI-Chenli-teaching/cs222p-winter20-team-12
+Student 1 UCI NetID: 51241019
+Student 1 Name: Yun Dai
 Student 2 UCI NetID (if applicable):
 Student 2 Name (if applicable):
 
 
 2. Internal Record Format
 - Show your record format design and describe how your design satisfies O(1) field access.
+  The idea is basically the same with the record format for variable length records introduced in the lecture. That is, at the beginning of each record in my file, there are (n + 1) signed short offset variables (n = number of fields), in which the first one indicates the total number of fields in this record, and each of the rest stores the offset of the end of corresponding field, with respect to the end of the offsets. If one field has a NULL value, then the corresponding offset would have a value of -1.
 
+  For example, if the following record is being inserted to the DBMS:
+
+  	Name: "Anteater", Age: NULL, Height: 177.8, Salary: NULL
+
+  
 
 
 - Describe how you store a VarChar field.

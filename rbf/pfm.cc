@@ -1,6 +1,5 @@
 #include <iostream>
 #include "pfm.h"
-#include "logger.h"
 
 /**
  * ======= PagedFileManager =======
@@ -27,7 +26,6 @@ RC PagedFileManager::createFile(const std::string &fileName) {
 
 RC PagedFileManager::destroyFile(const std::string &fileName) {
   if (!ifFileExists(fileName)) {
-    DB_WARNING << "try to delete non-exist file " << fileName;
     return -1;
   }
   return remove(fileName.c_str());
@@ -55,18 +53,17 @@ FileHandle::~FileHandle() = default;
 
 RC FileHandle::openFile(const std::string &fileName) {
   if (!PagedFileManager::ifFileExists(fileName)) {
-    DB_WARNING << "try to open non-exist file " << fileName;
     return -1;
   }
 
   if (_file.is_open()) {
-    DB_WARNING << "file " << name << "already open!";
+//    DB_WARNING << "file " << name << "already open!";
     return -1;
   }
 
   _file.open(fileName, std::ios::in | std::ios::out | std::ios::binary);
   if (!_file.good()) {
-    DB_WARNING << "failed to open file " << fileName;
+//    DB_WARNING << "failed to open file " << fileName;
     return -1;
   }
   name = fileName;
@@ -80,7 +77,7 @@ RC FileHandle::openFile(const std::string &fileName) {
 
 RC FileHandle::closeFile() {
   if (!_file.is_open()) {
-    DB_WARNING << "File not opened.";
+//    DB_WARNING << "File not opened.";
     return -1;
   }
 
@@ -103,7 +100,7 @@ RC FileHandle::updateCounterToFile() {
 RC FileHandle::createFile(const std::string &fileName) {
 
   if (PagedFileManager::ifFileExists(fileName)) {
-    DB_WARNING << "File " << fileName << " exist!";
+//    DB_WARNING << "File " << fileName << " exist!";
     return -1;
   }
 
@@ -112,7 +109,7 @@ RC FileHandle::createFile(const std::string &fileName) {
 
   _file.open(fileName, std::ios::out | std::ios::binary);
   if (!_file.good()) {
-    DB_WARNING << "failed to create file " << fileName;
+//    DB_WARNING << "failed to create file " << fileName;
     return -1;
   }
   // write counters as metadata to head of file
@@ -140,7 +137,7 @@ RC FileHandle::writePage(PageNum pageNum, const void *data) {
 
 RC FileHandle::appendPage(const void *data) {
   if (!_file.is_open()) {
-    DB_WARNING << "File is not opened!";
+//    DB_WARNING << "File is not opened!";
     return -1;
   }
   _file.seekp(getPos(appendPageCounter));
@@ -162,7 +159,7 @@ RC FileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePage
 
 RC FileHandle::writeRecord(size_t pos, const void *record, unsigned size) {
   if (!_file.is_open()) {
-    DB_WARNING << "File is not opened!";
+//    DB_WARNING << "File is not opened!";
     return -1;
   }
   _file.seekp(pos);

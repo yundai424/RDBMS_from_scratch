@@ -1,9 +1,13 @@
 #ifndef _pfm_h_
 #define _pfm_h_
 
-#include <cstring>
+#include <string>
+#include <fstream>
 
-#include "page.h"
+typedef unsigned PageNum;
+typedef int RC;
+
+#define PAGE_SIZE 4096
 
 class FileHandle;
 
