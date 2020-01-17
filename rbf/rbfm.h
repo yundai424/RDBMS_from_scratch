@@ -8,7 +8,7 @@
 #include <unordered_set>
 //#include <fstream>
 #include <vector>
-//#include <string>
+#include <string.h>
 #include <iostream>
 #include <ostream>
 #include <sstream>
