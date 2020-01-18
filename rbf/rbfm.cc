@@ -49,7 +49,6 @@ RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
 
 RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const void *data, RID &rid) {
-//  DB_INFO << "Insert data";
   // use the array of field offsets method for variable length record introduced in class as the format of record
   // each record has a leading series of bytes indicating the pointers to each field
   auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
@@ -289,23 +288,6 @@ void RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &rec
   }
 
 }
-//
-//Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_handle) {
-//  // find the first available free slot to insert data
-//  // will also handle creating new page / new slot when there's no available one
-//  auto it = free_slots_.lower_bound(size + sizeof(unsigned)); // greater or equal
-//  if (it == free_slots_.end()) {
-//    appendNewPage(file_handle);
-//    it = free_slots_.lower_bound(size + sizeof(unsigned));
-//  }
-//  auto &available_pages = it->second;
-//  Page *res = *available_pages.begin();
-//  available_pages.erase(res);
-//  if (available_pages.empty()) {
-//    free_slots_.erase(it);
-//  }
-//  return res;
-//}
 
 Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_handle) {
   // find the first available free slot to insert data
