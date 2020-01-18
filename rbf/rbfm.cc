@@ -67,11 +67,6 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
   page->dump(fileHandle);
 
 //  free_slots_[page->free_space].insert(page);
-
-  pages_[0]->load(fileHandle);
-//  DB_DEBUG << print_bytes(pages_[0]->data + 62, 150);
-  pages_[0]->dump(fileHandle);
-
   return 0;
 }
 
@@ -79,14 +74,14 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<
                                       const RID &rid, void *data) {
 
   if (rid.pageNum >= fileHandle.getNumberOfPages()) {
-//    DB_DEBUG << "RID NOT EXIST";
+    // Page ID out of range
     return -1;
   }
 
   Page *p = pages_[rid.pageNum].get();
   p->load(fileHandle);
   if (rid.slotNum >= p->records_offset.size()) {
-//    DB_DEBUG << "RID NOT EXIST";
+    // RID invalid (larger or has been deleted)
     p->freeMem();
     return -1;
   }
@@ -243,7 +238,7 @@ RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDesc
   std::vector<char> decoded_data(offset, 0);
   size_t directory_size = sizeof(directory_t) * directories.size();
   size_t real_data_size = offset - directory_size;
-//  DB_DEBUG << "directory bytes " << directory_size << " real data size " << real_data_size;
+
   memcpy(decoded_data.data(), directories.data(), directory_size);
   memcpy(decoded_data.data() + directory_size, real_data, real_data_size);
 
@@ -262,8 +257,6 @@ void RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &rec
   directory_t *dir_pt = (directory_t *) src;
   directory_t field_num = *dir_pt++;
   if (field_num != recordDescriptor.size()) {
-//    DB_ERROR << "field num not matched! fields_num in directory: " << field_num << " fields_num in descriptor: "
-//             << recordDescriptor.size();
     throw std::runtime_error("field num not matched");
   }
   std::vector<int> fields_offset;
