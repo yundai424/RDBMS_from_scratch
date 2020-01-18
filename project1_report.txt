@@ -62,7 +62,9 @@ Student 2 Name (if applicable):
 
   2) Besides from the in-memory variables above, the Page object also has an in-memory char* pointer used to store the 4096-byte buffer. This buffer only exists when there is a need to load data of the page from file and do some operation, otherwise it will be a nullptr. 
 
-  3) Something about the readRecord() function:
+  3) After each operation, all the efforts and results will be physically written into the Linux file system via the Page::dump() function, but during the process of an operation, things will basically happen in-momory in the Page object.
+
+  4) Something about the readRecord() function:
      As mentioned above, an entry in record directory encodes a PID and a PageOffset, which altogether indicate whether the slot is normal, forwarding pointer, or empty/invalid. When attemping to read a record given an RID, the program firstly check whether the PageOffset is 0xfff (4095) which indicates this record has been deleted. Then it checks the corresponding PID stored in the slot. If the PID does not match the current page, which means it's a forwarding pointer, then it will go to read the record with an implicit actual "RID" consisting of (PID, PageOffset). Otherwise, it goes to read the piece of data beginning from the PageOffset-th byte in this page.
 
   The other parts of implementation are strictly following the logics introduced in textbook and in lecture.
