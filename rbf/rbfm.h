@@ -64,7 +64,6 @@ class Page; // Forward declarations
 struct FreeSlot {
   Page *page;
   size_t size;
-  size_t begin; // relative to page begin
 
   bool operator<(const FreeSlot &rhs) const {
     return size < rhs.size;
@@ -292,8 +291,6 @@ class RecordBasedFileManager {
   void appendNewPage(FileHandle &file_handle);
 
   Page *findAvailableSlot(size_t size, FileHandle &file_handle);
-
-  void rearrange(FreeSlot &slot, size_t total_size);
 
   static inline directory_t entryDirectoryOverheadLength(int fields_num) {
     return sizeof(directory_t) * (fields_num + 1);

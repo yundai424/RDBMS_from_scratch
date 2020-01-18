@@ -299,10 +299,6 @@ Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_ha
   return pages_.back().get();
 }
 
-// move the records behind the given slot ahead to fill the empty spaces
-void RecordBasedFileManager::rearrange(FreeSlot &slot, size_t total_size) {
-
-}
 
 
 /**************************************
