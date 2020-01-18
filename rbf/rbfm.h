@@ -16,9 +16,8 @@
 typedef unsigned short SID; // slod it
 typedef unsigned PID; // page id
 typedef unsigned PageOffset; // offset inside page, should be [0,4096)
-
-
 typedef short directory_t; // directories before real data, to indicate offset for each field
+
 static directory_t MAX_FIELD_NUM = INT16_MAX;
 
 
@@ -32,10 +31,6 @@ typedef struct {
 typedef enum {
   TypeInt = 0, TypeReal, TypeVarChar
 } AttrType;
-
-typedef enum {
-  Normal = 0, Empty, Forwarding
-} DirectoryType;
 
 typedef unsigned AttrLength;
 
@@ -282,7 +277,7 @@ class RecordBasedFileManager {
 
   PagedFileManager *pfm_;
   std::vector<std::shared_ptr<Page>> pages_;
-  std::map<size_t, std::unordered_set<Page *>> free_slots_; // assume each page only have one free slot
+//  std::map<size_t, std::unordered_set<Page *>> free_slots_; // assume each page only have one free slot
 
   /**
    * load meta of next page into memory

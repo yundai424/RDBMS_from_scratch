@@ -66,7 +66,7 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
   rid = page->insertData(data_to_be_inserted.data(), data_to_be_inserted.size());
   page->dump(fileHandle);
 
-  free_slots_[page->free_space].insert(page);
+//  free_slots_[page->free_space].insert(page);
 
   pages_[0]->load(fileHandle);
 //  DB_DEBUG << print_bytes(pages_[0]->data + 62, 150);
@@ -93,12 +93,13 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<
 
   auto &record_offset = p->records_offset[rid.slotNum];
   if (record_offset.first == p->pid) {
-    // in same page
+    // in the same page: directly read the record starting at PageOffset
     p->readData(record_offset.second, data, recordDescriptor);
   } else {
-    // redirect to another page
+    // redirect to another page: the PageOffset entry actually stores the RID at the exact page
     Page *redirect_p = pages_[record_offset.first].get();
     redirect_p->load(fileHandle);
+    PageOffset real_offset = redirect_p->records_offset[record_offset.second].second;
     redirect_p->readData(record_offset.second, data, recordDescriptor);
     redirect_p->freeMem();
   }
@@ -179,7 +180,7 @@ void RecordBasedFileManager::loadNextPage(FileHandle &fileHandle) {
   std::shared_ptr<Page> cur_page = std::make_shared<Page>(pages_.size());
   cur_page->load(fileHandle); // load and parse
   cur_page->freeMem();
-  free_slots_[cur_page->free_space].insert(cur_page.get());
+//  free_slots_[cur_page->free_space].insert(cur_page.get());
   pages_.push_back(cur_page);
 }
 
@@ -295,22 +296,32 @@ void RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &rec
   }
 
 }
+//
+//Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_handle) {
+//  // find the first available free slot to insert data
+//  // will also handle creating new page / new slot when there's no available one
+//  auto it = free_slots_.lower_bound(size + sizeof(unsigned)); // greater or equal
+//  if (it == free_slots_.end()) {
+//    appendNewPage(file_handle);
+//    it = free_slots_.lower_bound(size + sizeof(unsigned));
+//  }
+//  auto &available_pages = it->second;
+//  Page *res = *available_pages.begin();
+//  available_pages.erase(res);
+//  if (available_pages.empty()) {
+//    free_slots_.erase(it);
+//  }
+//  return res;
+//}
 
 Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_handle) {
   // find the first available free slot to insert data
   // will also handle creating new page / new slot when there's no available one
-  auto it = free_slots_.lower_bound(size + sizeof(unsigned)); // greater or equal
-  if (it == free_slots_.end()) {
-    appendNewPage(file_handle);
-    it = free_slots_.lower_bound(size + sizeof(unsigned));
+  for (auto p : pages_) {
+    if (p->free_space >= size + sizeof(unsigned)) return p.get();
   }
-  auto &available_pages = it->second;
-  Page *res = *available_pages.begin();
-  available_pages.erase(res);
-  if (available_pages.empty()) {
-    free_slots_.erase(it);
-  }
-  return res;
+  appendNewPage(file_handle);
+  return pages_.back().get();
 }
 
 // move the records behind the given slot ahead to fill the empty spaces

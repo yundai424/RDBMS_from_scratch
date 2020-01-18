@@ -9,39 +9,67 @@ Student 2 Name (if applicable):
 
 2. Internal Record Format
 - Show your record format design and describe how your design satisfies O(1) field access.
-  The idea is basically the same with the record format for variable length records introduced in the lecture. That is, at the beginning of each record in my file, there are (n + 1) signed short offset variables (n = number of fields), in which the first one indicates the total number of fields in this record, and each of the rest stores the offset of the end of corresponding field, with respect to the end of the offsets. If one field has a NULL value, then the corresponding offset would have a value of -1.
+
+  The idea is basically the same with the record format for variable length records introduced in the lecture. That is, at the beginning of each record in my file, there are (n + 1) signed short offset variables (n = number of fields), in which the first one indicates the total number of fields in this record, and each of the rest stores the offset of the end of corresponding field, with respect to the beginning of this record (including directories). If one field has a NULL value, then the corresponding offset would have a value of -1.
 
   For example, if the following record is being inserted to the DBMS:
 
   	Name: "Anteater", Age: NULL, Height: 177.8, Salary: NULL
 
-  
+  Then the offsets will be 4, 12, -1, 16,  -1. The offset of the Name field is (4+1) * sizeof(short) + sizeof(int) + 8, as I also include the length of the string in the record. Following the directories is the exact data that is passed into insertRecord(), without further re-formatting.
+
+  The field can be accessed in O(1) time as the program can directly index into the field offsets, get the offset of the end of this record, as well as the head (i.e. the end of the last not-NULL record before it), thus the length of the field, which are basically all we need to access the data of a field.
 
 
 - Describe how you store a VarChar field.
 
+  As described in the previous subsection, a VarChar field in my DBMS is represented as a 4-byte int representing its length, and the exact value of it. 
 
 
 3. Page Format
 - Show your page format design
 
+  My page format design basically follows the page format for variable length records introduced in lectures. A 4096-byte page is splitted into three parts: 1) record data, 2) free space, and 3) slot directory.
+
+  1) Record data: the first part of the page is compacted record data. Each record is encoded into the internal record format illustrated in the previous section, and stored in this part one after another. There is no free block in this part, that is, a record is always located right after the previous one.
+
+  2) Free space: a continuous free space that can be used to store future records.
+
+  3) Slot directory: a directory with each element in it encoding the information about the slot and corresponding record, and last two extra elements representing the number of slots and the size of free space in the space. The information includes a) whether the slot is actually empty/invalid (i.e. deleted previously and can be reuse), b) whether the slot is a forwarding pointer to and the slot in another page it's pointing to, and, c) if the slot is "normal" (not empty, not forwarding), the offset of the beginning of corresponding record, relative to the page. Each element is an unsigned int thus has 32 bits. The first 20 bits are used to encode the PID of the record, and the remaining 12 bits are used to represent the offset.
+    a) When the slot is said as "normal", then everything goes normally: the 20 bits represent the PID, and the following 12 bits represent the relative location of the start of the corresponding record.
+    b) When the slot is empty, the PID is still that of the current page, yet the following 12 bits will have a value of 0xfff (4095), which could by no mean be a valid offset (remember that there are always two unsigned int values at the end of the page representing number of slots and free space size).
+    c) When the slot is a forwarding pointer that points to another slot in another page, which could be a case when the original record was updated to be longer than what the current page could offer and thus was placed to another page, the PID will be that of the other page, and the following 12 bits will encode the "actual" SID where the data resides.
 
 
 4. Page Management
 - Show your algorithm of finding next available-space page when inserting a record.
 
+  I use a Page class as an abstraction of a physical 4096-byte page. A Page object has several in-memory variables about it (its PID, its free space size, its record offsets, the current position of beginning of free space, etc.). All these variables are maintained to be up-to-date during every operation. 
+
+  The RecordBasedFileManager keeps a std::vector<std::shared_ptr<Page>> -- a collection of pages with ascending order by PID (consequently the ascending order by their offset in the file). So each time the program needs to find the next available-space page, it just simply iterate through this vector and return the pointer of the first page that has free space larger than desired size, without any need to re-read the page into memory and parse its data again.
 
 
 - Show your hidden page format design if applicable
+
+  As mentioned during the lecture on Jan 16, the FileHandle counters should be written in a 4096-byte hidden page instead of just three arithmetic variables, since the atomic unit of file IO in operating system is 4k and all file operations should follow this requirement. Thus I use a hidden page at the very beginning of my file to store these three counters but nothing else. The three counters reside in the head of the hidden page.
 
 
 
 5. Implementation Detail
 - Other implementation details goes here.
 
+  1) As mentioned above, I design a Page class as abstraction of physical page to avoid frequent memory operation and file IO during implementation. The variables are (hopefully) taken good care of and kept consistent with each other as well as metadata physically stored in file by timely parsing/dumping/checking.
+
+  2) Besides from the in-memory variables above, the Page object also has an in-memory char* pointer used to store the 4096-byte buffer. This buffer only exists when there is a need to load data of the page from file and do some operation, otherwise it will be a nullptr. 
+
+  3) Something about the readRecord() function:
+     As mentioned above, an entry in record directory encodes a PID and a PageOffset, which altogether indicate whether the slot is normal, forwarding pointer, or empty/invalid. When attemping to read a record given an RID, the program firstly check whether the PageOffset is 0xfff (4095) which indicates this record has been deleted. Then it checks the corresponding PID stored in the slot. If the PID does not match the current page, which means it's a forwarding pointer, then it will go to read the record with an implicit actual "RID" consisting of (PID, PageOffset). Otherwise, it goes to read the piece of data beginning from the PageOffset-th byte in this page.
+
+  The other parts of implementation are strictly following the logics introduced in textbook and in lecture.
+
 
 
 6. Other (optional)
 - Freely use this section to tell us about things that are related to the project 1, but not related to the other sections (optional)
 
-
+  I think we couldn't be able to create extra .cc or .h files in our implementation, if we are required to use the provided makefile file, which only links those files that have been already provided. Yet I do think it would be a better practice in terms of engineering if we could do so. Or perhaps I just didn't find the correct way to link and include extra files without modifying /rbf/Makefile, considering my non-existing c++ knowledge LOL
