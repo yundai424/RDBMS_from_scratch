@@ -108,15 +108,15 @@ class Page {
 
   static void initPage(char *page_data);
 
-//  std::vector<std::pair<unsigned, unsigned>> getRecordOffsets() const;
 
   /**
-   * switch data beginning from begin forward by length
-   * @param begin
-   * @param length
+   * all record data after `after_offset` will be switch `switch_offset` bytes forward/backward
+   * @param after_offset
+   * @param switch_offset
+   * @param forward
    * @return
    */
-  RC switchFoward(size_t begin, size_t length);
+  RC switchRecords(size_t after_offset, size_t switch_offset, bool forward);
 
  private:
 
@@ -136,6 +136,8 @@ class Page {
   static inline std::pair<PID, PageOffset> decodeDirectory(unsigned directory);
 
   static inline unsigned encodeDirectory(std::pair<PID, PageOffset> page_offset);
+
+  static size_t getRecordSize(const char * begin);
 
 };
 
