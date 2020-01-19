@@ -1,6 +1,15 @@
 #include "pfm.h"
 
 /**
+ * ======= Logger =======
+ */
+#ifdef MUTE_LOG
+LogLevel Logger::global_level = LogLevel::QUIET;
+#else
+LogLevel Logger::global_level = LogLevel::DEBUGGING;
+#endif
+
+/**
  * ======= PagedFileManager =======
  */
 PagedFileManager *PagedFileManager::_pf_manager = nullptr;
@@ -25,6 +34,7 @@ RC PagedFileManager::createFile(const std::string &fileName) {
 
 RC PagedFileManager::destroyFile(const std::string &fileName) {
   if (!ifFileExists(fileName)) {
+//    DB_WARNING << "try to delete non-exist file " << fileName;
     return -1;
   }
   return remove(fileName.c_str());
@@ -52,6 +62,7 @@ FileHandle::~FileHandle() = default;
 
 RC FileHandle::openFile(const std::string &fileName) {
   if (!PagedFileManager::ifFileExists(fileName)) {
+//    DB_WARNING << "try to open non-exist file " << fileName;
     return -1;
   }
 

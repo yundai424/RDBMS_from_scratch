@@ -305,8 +305,6 @@ Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_ha
   return pages_.back().get();
 }
 
-
-
 /**************************************
  *
  * ========= PAGE CLASS ==========
@@ -420,6 +418,40 @@ void Page::initPage(char *page_data) {
   *((int *) (page_data + PAGE_SIZE) - 2) = 0; // initial num_slots
 }
 
+RC Page::switchRecords(size_t after_offset, size_t switch_offset, bool forward) {
+  // since records are continuous, we only need to find the start and size of the chunk
+  size_t chunk_start = 0;
+  for (auto &offset: records_offset) {
+    if (offset.first != pid) continue;
+    if (offset.second <= after_offset) continue;
+    chunk_start = std::max(chunk_start, size_t(offset.second));
+    if (forward) offset.second += switch_offset;
+    else offset.second -= switch_offset;
+  }
+  size_t chunk_size = data_end - chunk_start;
+  if (forward) {
+    memcpy(data + chunk_start + switch_offset, data + chunk_start, chunk_size);
+    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") forward " << switch_offset << " bytes";
+  } else {
+    memcpy(data + chunk_start - switch_offset, data + chunk_start, chunk_size);
+    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back " << switch_offset << " bytes";
+  }
+  return 0;
+}
+
+size_t Page::getRecordSize(const char *begin) {
+
+  directory_t *dir_pt = (directory_t *) (begin);
+  directory_t field_num = *dir_pt++;
+
+  int last_field_end = 0;
+  for (int i = 0; i < field_num; ++i) {
+    // if null, will be -1
+    last_field_end = std::max(last_field_end, int(*dir_pt++));
+  }
+  return last_field_end;
+}
+
 void Page::checkDataend() {
   size_t last_record_begin = 0;
   for (auto &record:records_offset) {
@@ -427,15 +459,9 @@ void Page::checkDataend() {
       last_record_begin = std::max(last_record_begin, std::size_t(record.second));
   }
 
-  directory_t *dir_pt = (directory_t *) (data + last_record_begin);
-  directory_t field_num = *dir_pt++;
-
-  int last_field_end = 0;
-  for (int i = 0; i < field_num; ++i) {
-    last_field_end = std::max(last_field_end, int(*dir_pt++));
-  }
-  if (last_field_end + last_record_begin != data_end)
-    throw std::runtime_error("data end not match " + std::to_string(last_field_end + last_record_begin) + ":" + std::to_string(data_end));
+  size_t last_record_size = getRecordSize(data + last_record_begin);
+  if (last_record_size + last_record_begin != data_end)
+    throw std::runtime_error("data end not match " + std::to_string(last_record_size + last_record_begin) + ":" + std::to_string(data_end));
 
 }
 
