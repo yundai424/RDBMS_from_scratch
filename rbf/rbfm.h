@@ -102,6 +102,8 @@ class Page {
 
   RID insertData(const char *new_data, size_t size);
 
+  RC deleteRecord(SID sid, const std::pair<PID, PageOffset> & offset);
+
   void readData(PageOffset page_offset, void *out, const std::vector<Attribute> &recordDescriptor);
 
 //  std::string ToString() const;
@@ -292,7 +294,14 @@ class RecordBasedFileManager {
    */
   void appendNewPage(FileHandle &file_handle);
 
+  /**
+   * find Available page to insert `size` data, will append new page if all pages are full
+   * @param size
+   * @param file_handle
+   * @return
+   */
   Page *findAvailableSlot(size_t size, FileHandle &file_handle);
+
 
   static inline directory_t entryDirectoryOverheadLength(int fields_num) {
     return sizeof(directory_t) * (fields_num + 1);

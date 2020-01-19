@@ -79,7 +79,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<
 
   Page *p = pages_[rid.pageNum].get();
   p->load(fileHandle);
-  if (rid.slotNum >= p->records_offset.size()) {
+  if (rid.slotNum >= p->records_offset.size() || p->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
     // RID invalid (larger or has been deleted)
     p->freeMem();
     return -1;
@@ -142,12 +142,87 @@ RC RecordBasedFileManager::printRecord(const std::vector<Attribute> &recordDescr
 
 RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const RID &rid) {
-  return -1;
+  if (rid.pageNum > pages_.size()) {
+    DB_WARNING << "deleteRecord fail, page num " << rid.pageNum << " no exist";
+    return -1;
+  }
+  Page *origin_page = pages_[rid.pageNum].get();
+  origin_page->load(fileHandle);
+
+  if (origin_page->records_offset.size() >= rid.slotNum) {
+    DB_WARNING << "deleteRecord fail, slot num " << rid.slotNum << " no exist";
+    return -1;
+  }
+
+  auto &offset = origin_page->records_offset[rid.slotNum];
+  if (offset.first == origin_page->pid) {
+    // in origin page
+    return origin_page->deleteRecord(rid.slotNum, offset);
+  } else {
+    // redirect to another page
+    Page *redirect_page = pages_[offset.first].get();
+    redirect_page->load(fileHandle);
+    redirect_page->deleteRecord(rid.slotNum, offset);
+    redirect_page->dump(fileHandle);
+  }
+
+  origin_page->dump(fileHandle);
+
+  return 0;
 }
 
 RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const void *data, const RID &rid) {
-  return -1;
+  if (rid.pageNum > pages_.size()) {
+    DB_WARNING << "updateRecord fail, page num " << rid.pageNum << " no exist";
+    return -1;
+  }
+  Page *origin_page = pages_[rid.pageNum].get();
+  origin_page->load(fileHandle);
+
+  if (origin_page->records_offset.size() >= rid.slotNum) {
+    DB_WARNING << "updateRecord fail, slot num " << rid.slotNum << " no exist";
+    return -1;
+  }
+
+
+  // use the array of field offsets method for variable length record introduced in class as the format of record
+  // each record has a leading series of bytes indicating the pointers to each field
+  auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
+  size_t new_size = data_to_be_inserted.size();
+//  DB_DEBUG << "updateRecord TOTAL SIZE " << total_size;
+  const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 3;
+  if (new_size > MAX_SIZE) {
+    DB_ERROR << "data size " << new_size << " larger than MAX_SIZE " << MAX_SIZE;
+    return -1;
+  }
+
+
+
+  auto & offset = origin_page->records_offset[rid.slotNum];
+  if (offset.first == origin_page->pid) {
+    // inside origin page
+    size_t old_size = Page::getRecordSize(origin_page->data + offset.second);
+    if (new_size > old_size && (new_size - old_size) > origin_page->real_free_space_) {
+      // become larger and current page can not fit
+      Page * new_page = findAvailableSlot(new_size,fileHandle);
+      // be careful! new_page might be the same as origin_page
+    }
+
+  } else {
+    // redirect to another page
+    Page * another_page = pages_[offset.second].get();
+    another_page->load(fileHandle);
+
+    another_page->dump(fileHandle);
+  }
+
+  Page *page = findAvailableSlot(new_size, fileHandle);
+  page->load(fileHandle);
+  rid = page->insertData(data_to_be_inserted.data(), data_to_be_inserted.size());
+  page->dump(fileHandle);
+
+//  free_slots_[page->free_space].insert(page);
 }
 
 RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
@@ -299,6 +374,10 @@ Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_ha
   return pages_.back().get();
 }
 
+bool RecordBasedFileManager::checkRid(RID rid) {
+
+}
+
 /**************************************
  *
  * ========= PAGE CLASS ==========
@@ -342,6 +421,18 @@ RID Page::insertData(const char *new_data, size_t size) {
   checkDataend();
 //  DB_ERROR << data_end;
   return {pid, sid};
+}
+
+RC Page::deleteRecord(SID sid, const std::pair<PID, PageOffset> &offset) {
+  // assume this record is inside this page
+  size_t record_size = getRecordSize(data + offset.second);
+  switchRecords(offset.second, record_size, false);
+  real_free_space_ -= record_size;
+  if (offset.first == pid) {
+    // inside this page
+    records_offset[sid] = {pid, INVALID_OFFSET};
+  }
+  maintainFreeSpace();
 }
 
 void Page::readData(PageOffset page_offset, void *out, const std::vector<Attribute> &recordDescriptor) {
@@ -425,10 +516,12 @@ RC Page::switchRecords(size_t after_offset, size_t switch_offset, bool forward) 
   size_t chunk_size = data_end - chunk_start;
   if (forward) {
     memcpy(data + chunk_start + switch_offset, data + chunk_start, chunk_size);
-    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") forward " << switch_offset << " bytes";
+    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
+             << ") forward " << switch_offset << " bytes";
   } else {
     memcpy(data + chunk_start - switch_offset, data + chunk_start, chunk_size);
-    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back " << switch_offset << " bytes";
+    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back "
+             << switch_offset << " bytes";
   }
   return 0;
 }
@@ -455,7 +548,8 @@ void Page::checkDataend() {
 
   size_t last_record_size = getRecordSize(data + last_record_begin);
   if (last_record_size + last_record_begin != data_end)
-    throw std::runtime_error("data end not match " + std::to_string(last_record_size + last_record_begin) + ":" + std::to_string(data_end));
+    throw std::runtime_error(
+        "data end not match " + std::to_string(last_record_size + last_record_begin) + ":" + std::to_string(data_end));
 
 }
 
