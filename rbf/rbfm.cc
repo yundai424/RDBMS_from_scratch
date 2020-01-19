@@ -52,7 +52,9 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
   // use the array of field offsets method for variable length record introduced in class as the format of record
   // each record has a leading series of bytes indicating the pointers to each field
   auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
-  size_t total_size = data_to_be_inserted.size();
+  if (data_to_be_inserted.first != 0)
+    return -1;  // varchar longer than upper limit
+  size_t total_size = data_to_be_inserted.second.size();
 //  DB_DEBUG << "TOTAL SIZE " << total_size;
   const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 3;
   if (total_size > MAX_SIZE) {
@@ -62,7 +64,7 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
 
   Page *page = findAvailableSlot(total_size, fileHandle);
   page->load(fileHandle);
-  rid = page->insertData(data_to_be_inserted.data(), data_to_be_inserted.size());
+  rid = page->insertData(data_to_be_inserted.second.data(), data_to_be_inserted.second.size());
   page->dump(fileHandle);
 
 //  free_slots_[page->free_space].insert(page);
@@ -89,6 +91,9 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<
   if (record_offset.first == p->pid) {
     // in the same page: directly read the record starting at PageOffset
     p->readData(record_offset.second, data, recordDescriptor);
+  } else if (record_offset.first == Page::FORWARDED_SLOT) {
+    DB_ERROR << "Illegal direct access to a forwarded slot: " << rid.pageNum << " " << rid.slotNum;
+    return -1;
   } else {
     // redirect to another page: the PageOffset entry actually stores the RID at the exact page
     Page *redirect_p = pages_[record_offset.first].get();
@@ -275,7 +280,7 @@ std::vector<bool> RecordBasedFileManager::parseNullIndicator(const unsigned char
   return null_indicators;
 }
 
-std::vector<char>
+std::pair<RC, std::vector<char>>
 RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDescriptor,
                                         const void *data) {
   // parse null indicators
@@ -298,6 +303,10 @@ RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDesc
       if (recordDescriptor[i].type == TypeVarChar) {
         // we also store the int which indicate varchar len
         int char_len = *((int *) ((char *) data + raw_offset));
+        if (char_len > recordDescriptor[i].length) {
+          // varchar longer than upper limit
+          return {-1, std::vector<char>()};
+        }
         offset += char_len + sizeof(int);
         raw_offset += char_len + sizeof(int);
       } else {
@@ -316,7 +325,7 @@ RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDesc
   memcpy(decoded_data.data(), directories.data(), directory_size);
   memcpy(decoded_data.data() + directory_size, real_data, real_data_size);
 
-  return decoded_data;
+  return {0, decoded_data};
 }
 
 void RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recordDescriptor,
@@ -507,8 +516,8 @@ RC Page::switchRecords(size_t after_offset, size_t switch_offset, bool forward) 
   // since records are continuous, we only need to find the start and size of the chunk
   size_t chunk_start = 0;
   for (auto &offset: records_offset) {
-    if (offset.first != pid) continue;
-    if (offset.second <= after_offset) continue;
+    if (offset.first != pid && offset.first != FORWARDED_SLOT) continue;
+    if (offset.second <= after_offset || offset.second == INVALID_OFFSET) continue;
     chunk_start = std::max(chunk_start, size_t(offset.second));
     if (forward) offset.second += switch_offset;
     else offset.second -= switch_offset;
