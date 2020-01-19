@@ -4,14 +4,8 @@
 #include "pfm.h"
 
 #include <memory>
-#include <map>
 #include <unordered_set>
-//#include <fstream>
-#include <vector>
 #include <string.h>
-#include <iostream>
-#include <ostream>
-#include <sstream>
 
 typedef unsigned short SID; // slod it
 typedef unsigned PID; // page id
@@ -120,7 +114,8 @@ class Page {
 
  private:
 
-  static constexpr unsigned INVALID_OFFSET = 0xfff;
+  static constexpr unsigned INVALID_OFFSET = 0xfff;  // PageOffset value to indicate a deleted slot
+  static constexpr unsigned FORWARDED_SLOT = 0xffff; // PID value to indicate the slot is forwarded from other slot
   static constexpr RC REDIRECT = 2;
 
   void parseMeta();

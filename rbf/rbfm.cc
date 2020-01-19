@@ -91,6 +91,9 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<
   if (record_offset.first == p->pid) {
     // in the same page: directly read the record starting at PageOffset
     p->readData(record_offset.second, data, recordDescriptor);
+  } else if (record_offset.first == Page::FORWARDED_SLOT) {
+    DB_ERROR << "Illegal direct access to a forwarded slot: " << rid.pageNum << " " << rid.slotNum;
+    return -1;
   } else {
     // redirect to another page: the PageOffset entry actually stores the RID at the exact page
     Page *redirect_p = pages_[record_offset.first].get();
@@ -422,8 +425,8 @@ RC Page::switchRecords(size_t after_offset, size_t switch_offset, bool forward) 
   // since records are continuous, we only need to find the start and size of the chunk
   size_t chunk_start = 0;
   for (auto &offset: records_offset) {
-    if (offset.first != pid) continue;
-    if (offset.second <= after_offset) continue;
+    if (offset.first != pid && offset.first != FORWARDED_SLOT) continue;
+    if (offset.second <= after_offset || offset.second == INVALID_OFFSET) continue;
     chunk_start = std::max(chunk_start, size_t(offset.second));
     if (forward) offset.second += switch_offset;
     else offset.second -= switch_offset;
