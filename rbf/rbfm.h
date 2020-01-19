@@ -306,7 +306,7 @@ class RecordBasedFileManager {
    * @param data
    * @return
    */
-  static std::vector<char> serializeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
+  static std::pair<RC, std::vector<char>> serializeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
 
   /**
    * decode data from record on page
