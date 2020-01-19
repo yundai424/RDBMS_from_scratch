@@ -76,6 +76,9 @@ class Page {
 
  public:
 
+  static constexpr size_t MAX_SIZE = PAGE_SIZE - 3 * sizeof(int);
+  static constexpr SID FIND_NEW_SID = UINT16_MAX;
+
   PID pid;
   /*
    * free_space = real_free_space_                (there're deleted directory we can reuse,)
@@ -94,11 +97,30 @@ class Page {
 
   void freeMem();
 
-  RID insertData(const char *new_data, size_t size);
+  /**
+   *
+   * @param new_data
+   * @param size
+   * @param sid only specify this when updateRecord redirect back to origin page
+   * @return
+   */
+  RID insertData(const char *new_data, size_t size, SID sid=FIND_NEW_SID);
 
-  RC deleteRecord(SID sid, const std::pair<PID, PageOffset> & offset);
 
-  void readData(PageOffset page_offset, void *out, const std::vector<Attribute> &recordDescriptor);
+  /**
+   * erase data and update free space accordingly
+   * @param record_offset begin offset of record
+   * @return
+   */
+  RC deleteRecord(size_t record_offset);
+
+  /**
+   * assume data exist in this page (already redirected, if so)
+   * @param record_offset begin offset of record
+   * @param out
+   * @param recordDescriptor
+   */
+  void readData(PageOffset record_offset, void *out, const std::vector<Attribute> &recordDescriptor);
 
 //  std::string ToString() const;
 
@@ -106,13 +128,13 @@ class Page {
 
 
   /**
-   * all record data after `after_offset` will be switch `switch_offset` bytes forward/backward
+   * all record data after `after_offset` will be shift `switch_offset` bytes forward/backward
    * @param after_offset
-   * @param switch_offset
+   * @param shift_offset
    * @param forward
    * @return
    */
-  RC switchRecords(size_t after_offset, size_t switch_offset, bool forward);
+  RC shiftRecords(size_t after_offset, size_t shift_offset, bool forward);
 
  private:
 

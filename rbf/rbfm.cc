@@ -56,9 +56,8 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
     return -1;  // varchar longer than upper limit
   size_t total_size = data_to_be_inserted.second.size();
 //  DB_DEBUG << "TOTAL SIZE " << total_size;
-  const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 3;
-  if (total_size > MAX_SIZE) {
-//    DB_ERROR << "data size " << total_size << " larger than MAX_SIZE " << MAX_SIZE;
+  if (total_size > Page::MAX_SIZE) {
+    DB_ERROR << "data size " << total_size << " larger than MAX_SIZE " << Page::MAX_SIZE;
     return -1;
   }
 
@@ -163,12 +162,20 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vecto
   auto &offset = origin_page->records_offset[rid.slotNum];
   if (offset.first == origin_page->pid) {
     // in origin page
-    return origin_page->deleteRecord(rid.slotNum, offset);
+    auto data_begin = offset.second;
+    offset.second = Page::INVALID_OFFSET;
+    origin_page->deleteRecord(data_begin);
   } else {
     // redirect to another page
+    SID redirect_sid = offset.second;
+    offset = {origin_page->pid, Page::INVALID_OFFSET};
+
     Page *redirect_page = pages_[offset.first].get();
     redirect_page->load(fileHandle);
-    redirect_page->deleteRecord(rid.slotNum, offset);
+    auto &redirect_offset = redirect_page->records_offset[redirect_sid];
+    auto data_begin = redirect_offset.second;
+    redirect_offset = {redirect_page->pid, Page::INVALID_OFFSET};
+    redirect_page->deleteRecord(data_begin);
     redirect_page->dump(fileHandle);
   }
 
@@ -191,44 +198,73 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
     return -1;
   }
 
+  /*
+   * serialize data just like insert
+   */
 
   // use the array of field offsets method for variable length record introduced in class as the format of record
   // each record has a leading series of bytes indicating the pointers to each field
   auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
-  size_t new_size = data_to_be_inserted.size();
+  size_t new_size = data_to_be_inserted.second.size();
 //  DB_DEBUG << "updateRecord TOTAL SIZE " << total_size;
-  const static size_t MAX_SIZE = PAGE_SIZE - sizeof(unsigned) * 3;
-  if (new_size > MAX_SIZE) {
-    DB_ERROR << "data size " << new_size << " larger than MAX_SIZE " << MAX_SIZE;
+  if (new_size > Page::MAX_SIZE) {
+    DB_ERROR << "data size " << new_size << " larger than MAX_SIZE " << Page::MAX_SIZE;
     return -1;
   }
 
-
-
-  auto & offset = origin_page->records_offset[rid.slotNum];
-  if (offset.first == origin_page->pid) {
-    // inside origin page
-    size_t old_size = Page::getRecordSize(origin_page->data + offset.second);
-    if (new_size > old_size && (new_size - old_size) > origin_page->real_free_space_) {
-      // become larger and current page can not fit
-      Page * new_page = findAvailableSlot(new_size,fileHandle);
-      // be careful! new_page might be the same as origin_page
-    }
-
-  } else {
-    // redirect to another page
-    Page * another_page = pages_[offset.second].get();
-    another_page->load(fileHandle);
-
-    another_page->dump(fileHandle);
+  /*
+   * update record
+   */
+  auto &origin_offset = origin_page->records_offset[rid.slotNum];
+  Page *cur_page = origin_page;
+  auto &cur_offset = origin_offset;
+  if (origin_offset.first != origin_page->pid) {
+    // redirected to another page
+    cur_page = pages_[origin_offset.first].get();
+    cur_page->load(fileHandle);
+    cur_offset = cur_page->records_offset[origin_offset.second];
   }
 
-  Page *page = findAvailableSlot(new_size, fileHandle);
-  page->load(fileHandle);
-  rid = page->insertData(data_to_be_inserted.data(), data_to_be_inserted.size());
-  page->dump(fileHandle);
+  size_t old_size = Page::getRecordSize(cur_page->data + cur_offset.second);
+  if (new_size > old_size && (new_size - old_size) > cur_page->real_free_space_) {
+    // become too large that current page can not fit
 
-//  free_slots_[page->free_space].insert(page);
+    // 1. delete from cur_page
+    auto cur_data_begin = cur_offset.second;
+    cur_offset = {cur_page->pid, Page::INVALID_OFFSET};
+    cur_page->deleteRecord(cur_data_begin);
+
+    // 2. insert into new_page
+    Page *new_page = findAvailableSlot(new_size, fileHandle);
+    if (new_page != origin_page) new_page->load(fileHandle);
+    /*
+     * be careful! might redirected back to origin page, which means new_page == origin_page,
+     * in that case we should re-use old directory and sid instead of create a new one
+     */
+
+    new_page->insertData(data_to_be_inserted.second.data(),
+                         new_size,
+                         new_page == origin_page ? rid.slotNum : Page::FIND_NEW_SID);
+    if (new_page == origin_page) {
+      SID origin_sid = rid.slotNum;
+      new_page->insertData(data_to_be_inserted.second.data(), new_size, origin_sid);
+      // new_page->records_offset[origin_sid] will be updated accordingly
+    } else {
+      RID new_rid = new_page->insertData(data_to_be_inserted.second.data(), new_size);
+      new_page->records_offset[new_rid.slotNum].first = Page::FORWARDED_SLOT;
+      origin_page->records_offset[rid.slotNum] = {new_rid.pageNum, new_rid.slotNum};
+    }
+    if (new_page != origin_page) new_page->dump(fileHandle);
+  } else {
+    // shift backward/forward inside cur_page
+    size_t shift_offset = std::abs(int(old_size) - int(new_size));
+    cur_page->shiftRecords(cur_offset.second, shift_offset, new_size > old_size);
+  }
+
+  origin_page->dump(fileHandle);
+  if (cur_page != origin_page) cur_page->dump(fileHandle);
+
+  return 0;
 }
 
 RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
@@ -388,7 +424,6 @@ Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_ha
   return pages_.back().get();
 }
 
-
 /**************************************
  *
  * ========= PAGE CLASS ==========
@@ -414,8 +449,8 @@ void Page::freeMem() {
   data = nullptr;
 }
 
-RID Page::insertData(const char *new_data, size_t size) {
-  SID sid = findNextSlotID();
+RID Page::insertData(const char *new_data, size_t size, SID sid) {
+  if (sid == FIND_NEW_SID) sid = findNextSlotID();
   if (sid == records_offset.size()) {
     // new slot
     records_offset.emplace_back(pid, data_end);
@@ -434,22 +469,17 @@ RID Page::insertData(const char *new_data, size_t size) {
   return {pid, sid};
 }
 
-RC Page::deleteRecord(SID sid, const std::pair<PID, PageOffset> &offset) {
-  // assume this record is inside this page
-  size_t record_size = getRecordSize(data + offset.second);
-  switchRecords(offset.second, record_size, false);
+RC Page::deleteRecord(size_t record_offset) {
+  size_t record_size = getRecordSize(data + record_offset);
+  shiftRecords(record_offset, record_size, false);
   real_free_space_ -= record_size;
-  if (offset.first == pid) {
-    // inside this page
-    records_offset[sid] = {pid, INVALID_OFFSET};
-  }
   maintainFreeSpace();
-}
+  return 0;
 }
 
-void Page::readData(PageOffset page_offset, void *out, const std::vector<Attribute> &recordDescriptor) {
+void Page::readData(PageOffset record_offset, void *out, const std::vector<Attribute> &recordDescriptor) {
 //  DB_DEBUG << print_bytes(data,40);
-  RecordBasedFileManager::deserializeRecord(recordDescriptor, out, data + page_offset);
+  RecordBasedFileManager::deserializeRecord(recordDescriptor, out, data + record_offset);
 }
 
 void Page::dump(FileHandle &handle) {
@@ -515,26 +545,29 @@ void Page::initPage(char *page_data) {
   *((int *) (page_data + PAGE_SIZE) - 2) = 0; // initial num_slots
 }
 
-RC Page::switchRecords(size_t after_offset, size_t switch_offset, bool forward) {
+RC Page::shiftRecords(size_t after_offset, size_t shift_offset, bool forward) {
   // since records are continuous, we only need to find the start and size of the chunk
   size_t chunk_start = 0;
   for (auto &offset: records_offset) {
     if (offset.first != pid) continue;
     if (offset.second <= after_offset || offset.second == INVALID_OFFSET) continue;
     chunk_start = std::max(chunk_start, size_t(offset.second));
-    if (forward) offset.second += switch_offset;
-    else offset.second -= switch_offset;
+    if (forward) offset.second += shift_offset;
+    else offset.second -= shift_offset;
   }
   size_t chunk_size = data_end - chunk_start;
   if (forward) {
-    memcpy(data + chunk_start + switch_offset, data + chunk_start, chunk_size);
+    memcpy(data + chunk_start + shift_offset, data + chunk_start, chunk_size);
+    real_free_space_ -= shift_offset;
     DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
-             << ") forward " << switch_offset << " bytes";
+             << ") forward " << shift_offset << " bytes";
   } else {
-    memcpy(data + chunk_start - switch_offset, data + chunk_start, chunk_size);
+    memcpy(data + chunk_start - shift_offset, data + chunk_start, chunk_size);
+    real_free_space_ += shift_offset;
     DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back "
-             << switch_offset << " bytes";
+             << shift_offset << " bytes";
   }
+  maintainFreeSpace();
   return 0;
 }
 
