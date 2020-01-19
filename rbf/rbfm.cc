@@ -154,7 +154,8 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vecto
   Page *origin_page = pages_[rid.pageNum].get();
   origin_page->load(fileHandle);
 
-  if (origin_page->records_offset.size() >= rid.slotNum) {
+  if (origin_page->records_offset.size() <= rid.slotNum
+    || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
     DB_WARNING << "deleteRecord fail, slot num " << rid.slotNum << " no exist";
     return -1;
   }
@@ -549,8 +550,8 @@ RC Page::shiftRecords(size_t after_offset, size_t shift_offset, bool forward) {
   // since records are continuous, we only need to find the start and size of the chunk
   size_t chunk_start = 0;
   for (auto &offset: records_offset) {
-    if (offset.first != pid) continue;
-    if (offset.second <= after_offset || offset.second == INVALID_OFFSET) continue;
+    if (offset.first != pid) continue;           // forwarding to another slot: no need to shift
+    if (offset.second <= after_offset || offset.second == INVALID_OFFSET) continue;  // locates before it or deleted
     chunk_start = std::max(chunk_start, size_t(offset.second));
     if (forward) offset.second += shift_offset;
     else offset.second -= shift_offset;
