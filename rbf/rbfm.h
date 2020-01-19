@@ -117,7 +117,7 @@ class Page {
  private:
 
   static constexpr unsigned INVALID_OFFSET = 0xfff;  // PageOffset value to indicate a deleted slot
-  static constexpr unsigned FORWARDED_SLOT = 0xffff; // PID value to indicate the slot is forwarded from other slot
+  static constexpr unsigned FORWARDED_SLOT = 0xfffff; // PID value to indicate the slot is forwarded from other slot
   static constexpr RC REDIRECT = 2;
 
   void parseMeta();

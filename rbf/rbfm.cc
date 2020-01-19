@@ -98,8 +98,9 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<
     // redirect to another page: the PageOffset entry actually stores the RID at the exact page
     Page *redirect_p = pages_[record_offset.first].get();
     redirect_p->load(fileHandle);
+    // if redirected, we use offset to indicate SID in the redirected page
     PageOffset real_offset = redirect_p->records_offset[record_offset.second].second;
-    redirect_p->readData(record_offset.second, data, recordDescriptor);
+    redirect_p->readData(real_offset, data, recordDescriptor);
     redirect_p->freeMem();
   }
   p->freeMem();
@@ -259,6 +260,10 @@ void RecordBasedFileManager::loadNextPage(FileHandle &fileHandle) {
 }
 
 void RecordBasedFileManager::appendNewPage(FileHandle &file_handle) {
+  if (pages_.size() == Page::FORWARDED_SLOT) {
+    DB_ERROR << "Exceed max page num " << Page::FORWARDED_SLOT;
+    throw std::runtime_error("exceed max page num");
+  }
   char new_page[PAGE_SIZE];
   Page::initPage(new_page);
   file_handle.appendPage(new_page);
@@ -383,9 +388,6 @@ Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_ha
   return pages_.back().get();
 }
 
-bool RecordBasedFileManager::checkRid(RID rid) {
-
-}
 
 /**************************************
  *
@@ -442,6 +444,7 @@ RC Page::deleteRecord(SID sid, const std::pair<PID, PageOffset> &offset) {
     records_offset[sid] = {pid, INVALID_OFFSET};
   }
   maintainFreeSpace();
+}
 }
 
 void Page::readData(PageOffset page_offset, void *out, const std::vector<Attribute> &recordDescriptor) {
@@ -516,7 +519,7 @@ RC Page::switchRecords(size_t after_offset, size_t switch_offset, bool forward) 
   // since records are continuous, we only need to find the start and size of the chunk
   size_t chunk_start = 0;
   for (auto &offset: records_offset) {
-    if (offset.first != pid && offset.first != FORWARDED_SLOT) continue;
+    if (offset.first != pid) continue;
     if (offset.second <= after_offset || offset.second == INVALID_OFFSET) continue;
     chunk_start = std::max(chunk_start, size_t(offset.second));
     if (forward) offset.second += switch_offset;
