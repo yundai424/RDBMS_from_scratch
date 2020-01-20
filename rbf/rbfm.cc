@@ -157,6 +157,7 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vecto
   if (origin_page->records_offset.size() <= rid.slotNum
     || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
     DB_WARNING << "deleteRecord fail, slot num " << rid.slotNum << " no exist";
+    origin_page->freeMem();
     return -1;
   }
 
@@ -195,21 +196,25 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
   Page *origin_page = pages_[rid.pageNum].get();
   origin_page->load(fileHandle);
 
-  if (origin_page->records_offset.size() >= rid.slotNum) {
+  if (origin_page->records_offset.size() <= rid.slotNum
+    || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
     DB_WARNING << "updateRecord fail, slot num " << rid.slotNum << " no exist";
+    origin_page->freeMem();
     return -1;
   }
 
   /*
    * serialize data just like insert
    */
-
   auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
-  if (data_to_be_inserted.first != 0)
+  if (data_to_be_inserted.first != 0) {
+    origin_page->freeMem();
     return -1;  // varchar longer than upper limit
+  }
   size_t new_size = data_to_be_inserted.second.size();
 //  DB_DEBUG << "updateRecord TOTAL SIZE " << total_size;
   if (new_size > Page::MAX_SIZE) {
+    origin_page->freeMem();
     DB_ERROR << "data size " << new_size << " larger than MAX_SIZE " << Page::MAX_SIZE;
     return -1;
   }
@@ -228,7 +233,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
   }
 
   size_t old_size = Page::getRecordSize(cur_page->data + cur_offset.second);
-  if (new_size > old_size && (new_size - old_size) > cur_page->real_free_space_) {
+  if (new_size > old_size && (new_size - old_size) > cur_page->free_space) {
     // become too large that current page can not fit
 
     // 1. delete from cur_page
@@ -244,9 +249,6 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
      * in that case we should re-use old directory and sid instead of create a new one
      */
 
-    new_page->insertData(data_to_be_inserted.second.data(),
-                         new_size,
-                         new_page == origin_page ? rid.slotNum : Page::FIND_NEW_SID);
     if (new_page == origin_page) {
       SID origin_sid = rid.slotNum;
       new_page->insertData(data_to_be_inserted.second.data(), new_size, origin_sid);
@@ -261,6 +263,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
     // shift backward/forward inside cur_page
     size_t shift_offset = std::abs(int(old_size) - int(new_size));
     cur_page->shiftAfterRecords(cur_offset.second, shift_offset, new_size > old_size);
+    memcpy(cur_page->data + cur_offset.second, data_to_be_inserted.second.data(), new_size);
   }
 
   origin_page->dump(fileHandle);
@@ -568,9 +571,9 @@ RC Page::shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool f
     DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
              << ") forward " << shift_size << " bytes";
   } else {
-    memcpy(data + record_begin_offset, data + chunk_start, chunk_size);
+    memcpy(data + chunk_start - shift_size, data + chunk_start, chunk_size);
     if (shift_size > chunk_size)
-      memset(data + chunk_size, 0, shift_size - chunk_size); // in case there could be some non-zeros after shifting backward
+      memset(data + chunk_start - shift_size + chunk_size, 0, shift_size - chunk_size); // in case there could be some non-zeros after shifting backward
     real_free_space_ += shift_size;
     DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back "
              << shift_size << " bytes";
