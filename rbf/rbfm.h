@@ -178,16 +178,6 @@ unsigned Page::encodeDirectory(std::pair<PID, PageOffset> page_offset) {
   return (page_offset.first << 12) + page_offset.second;
 }
 
-
-struct FreeSlot {
-  Page *page;
-  size_t size;
-
-  bool operator<(const FreeSlot &rhs) const {
-    return size < rhs.size;
-  }
-};
-
 /********************************************************************
 * The scan iterator is NOT required to be implemented for Project 1 *
 ********************************************************************/
@@ -324,7 +314,13 @@ class RecordBasedFileManager {
 
   static std::vector<bool> parseNullIndicator(const unsigned char * data, unsigned fields_num);
 
-  bool isRIDValid(const RID &rid, FileHandle &file_handle);
+  /**
+   * check Rid and load page, if check valid, Page pointer will be returned, otherwise nullptr
+   * @param rid
+   * @param file_handle
+   * @return
+   */
+  std::pair<bool, Page *> loadPageWithRid(const RID &rid, FileHandle &file_handle);
 
  public:
 
@@ -343,13 +339,6 @@ class RecordBasedFileManager {
    * @param src
    */
   static void deserializeRecord(const std::vector<Attribute> &recordDescriptor, void *out, const char *src);
-
-  /**
-   * Recursively find the exact slot that stores the record, forwarded by potentially a sequence of forwarding pointers
-   * @param record_offset
-   * @return
-   */
-  std::pair<Page *, SID> findForwardingSlot(PID pid, SID sid, FileHandle &fileHandle);
 
 };
 

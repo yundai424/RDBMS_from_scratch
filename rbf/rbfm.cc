@@ -72,32 +72,31 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
 
 RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                       const RID &rid, void *data) {
-
-  if (!isRIDValid(rid, fileHandle)) {
+  auto ret = loadPageWithRid(rid, fileHandle);
+  if (!ret.first) {
     DB_WARNING << "readRecord failed, rid not exist";
     return -1;
   }
 
-  Page *p = pages_[rid.pageNum].get();
-  p->load(fileHandle);
+  Page *origin_page = ret.second;
 
-  auto &record_offset = p->records_offset[rid.slotNum];
-  if (record_offset.first == p->pid) {
+  auto &record_offset = origin_page->records_offset[rid.slotNum];
+  if (record_offset.first == origin_page->pid) {
     // in the same page: directly read the record starting at PageOffset
-    p->readData(record_offset.second, data, recordDescriptor);
+    origin_page->readData(record_offset.second, data, recordDescriptor);
   } else if (record_offset.first == Page::FORWARDED_SLOT) {
     DB_ERROR << "Illegal direct access to a forwarded slot: " << rid.pageNum << " " << rid.slotNum;
     return -1;
   } else {
     // redirect to another page: the PageOffset entry actually stores the RID at the exact page
-    Page *redirect_p = pages_[record_offset.first].get();
-    redirect_p->load(fileHandle);
+    Page *redirect_page = pages_[record_offset.first].get();
+    redirect_page->load(fileHandle);
     // if redirected, we use offset to indicate SID in the redirected page
-    PageOffset real_offset = redirect_p->records_offset[record_offset.second].second;
-    redirect_p->readData(real_offset, data, recordDescriptor);
-    redirect_p->freeMem();
+    PageOffset real_offset = redirect_page->records_offset[record_offset.second].second;
+    redirect_page->readData(real_offset, data, recordDescriptor);
+    redirect_page->freeMem();
   }
-  p->freeMem();
+  origin_page->freeMem();
 
   return 0;
 }
@@ -142,14 +141,13 @@ RC RecordBasedFileManager::printRecord(const std::vector<Attribute> &recordDescr
 
 RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const RID &rid) {
-
-  if (!isRIDValid(rid, fileHandle)) {
+  auto res = loadPageWithRid(rid, fileHandle);
+  if (!res.first) {
     DB_WARNING << "deleteRecord failed, RID invalid";
     return -1;
   }
 
-  Page *origin_page = pages_[rid.pageNum].get();
-  origin_page->load(fileHandle);
+  Page *origin_page = res.second;
 
   auto &offset = origin_page->records_offset[rid.slotNum];
   if (offset.first == origin_page->pid) {
@@ -179,13 +177,13 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vecto
 
 RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const void *data, const RID &rid) {
-  if (!isRIDValid(rid, fileHandle)) {
+  auto ret = loadPageWithRid(rid, fileHandle);
+  if (!ret.first) {
     DB_WARNING << "updateRecord failed, RID invalid";
     return -1;
   }
 
-  Page *origin_page = pages_[rid.pageNum].get();
-  origin_page->load(fileHandle);
+  Page *origin_page = ret.second;
 
   /*
    * serialize data just like insert
@@ -217,7 +215,8 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
   }
 
   size_t old_size = Page::getRecordSize(cur_page->data + cur_offset.second);
-  if (new_size > old_size && (new_size - old_size) > cur_page->free_space) {
+  // here we should compare real_free_space_, since we don't need to allocate another slot directory
+  if (new_size > old_size && (new_size - old_size) > cur_page->real_free_space_) {
     // become too large that current page can not fit
 
     // 1. delete from cur_page
@@ -258,10 +257,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
 
 RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                          const RID &rid, const std::string &attributeName, void *data) {
-  if (!isRIDValid(rid, fileHandle)) {
-    DB_WARNING << "readAttribute fail, RID invalid";
-    return -1;
-  }
+
   auto it = std::find(recordDescriptor.begin(), recordDescriptor.end(), attributeName);
   if (it == recordDescriptor.end()) {
     DB_WARNING << "No such attribute: " << attributeName;
@@ -269,7 +265,15 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const std::vect
   }
   int field_idx = it - recordDescriptor.begin();
 
-  Page *p = pages_[rid.pageNum].get();
+  auto res = loadPageWithRid(rid, fileHandle);
+  if (!res.first) {
+    DB_WARNING << "readAttribute fail, RID invalid";
+    return -1;
+  }
+
+
+
+  Page *p = res.second;
   p->load(fileHandle);
   auto &record_offset = p->records_offset[rid.slotNum];
 
@@ -432,21 +436,21 @@ Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_ha
   return pages_.back().get();
 }
 
-bool RecordBasedFileManager::isRIDValid(const RID &rid, FileHandle &file_handle) {
-  if (rid.pageNum > pages_.size()) {
+std::pair<bool, Page *> RecordBasedFileManager::loadPageWithRid(const RID &rid, FileHandle &file_handle) {
+  if (rid.pageNum >= pages_.size()) {
     DB_WARNING << "RID invalid, page num " << rid.pageNum << " no exist";
-    return false;
+    return {false, nullptr};
   }
   Page *origin_page = pages_[rid.pageNum].get();
   origin_page->load(file_handle);
 
-  if (origin_page->records_offset.size() <= rid.slotNum
-    || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
+  if (rid.slotNum > origin_page->records_offset.size()
+      || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
     DB_WARNING << "RID invalid, slot num " << rid.slotNum << " no exist";
     origin_page->freeMem();
-    return false;
+    return {false, nullptr};
   }
-  return true;
+  return {true, origin_page};
 }
 
 /**************************************
@@ -578,7 +582,8 @@ RC Page::shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool f
   size_t chunk_start = PAGE_SIZE;
   for (auto &offset: records_offset) {
     if (offset.first != pid) continue;           // forwarding to another slot: no need to shift
-    if (offset.second <= record_begin_offset || offset.second == INVALID_OFFSET) continue;  // locates before it or deleted
+    if (offset.second <= record_begin_offset || offset.second == INVALID_OFFSET)
+      continue;  // locates before it or deleted
     chunk_start = std::min(chunk_start, size_t(offset.second));
     if (forward) offset.second += shift_size;
     else offset.second -= shift_size;
@@ -586,14 +591,16 @@ RC Page::shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool f
   size_t chunk_size = data_end - chunk_start;
   if (forward) {
     memcpy(data + chunk_start + shift_size, data + chunk_start, chunk_size);
-    memset(data + record_begin_offset, 0, shift_size);
+    memset(data + chunk_start, 0, shift_size);
     real_free_space_ -= shift_size;
     DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
              << ") forward " << shift_size << " bytes";
   } else {
     memcpy(data + chunk_start - shift_size, data + chunk_start, chunk_size);
     if (shift_size > chunk_size)
-      memset(data + chunk_start - shift_size + chunk_size, 0, shift_size - chunk_size); // in case there could be some non-zeros after shifting backward
+      memset(data + chunk_start - shift_size + chunk_size,
+             0,
+             shift_size); // in case there could be some non-zeros after shifting backward
     real_free_space_ += shift_size;
     DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back "
              << shift_size << " bytes";
