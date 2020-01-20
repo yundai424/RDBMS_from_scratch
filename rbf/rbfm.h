@@ -324,6 +324,8 @@ class RecordBasedFileManager {
 
   static std::vector<bool> parseNullIndicator(const unsigned char * data, unsigned fields_num);
 
+  bool isRIDValid(const RID &rid, FileHandle &file_handle);
+
  public:
 
   /**

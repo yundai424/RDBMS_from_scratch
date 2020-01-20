@@ -73,18 +73,13 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
 RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                       const RID &rid, void *data) {
 
-  if (rid.pageNum >= fileHandle.getNumberOfPages()) {
-    // Page ID out of range
+  if (!isRIDValid(rid, fileHandle)) {
+    DB_WARNING << "readRecord failed, rid not exist";
     return -1;
   }
 
   Page *p = pages_[rid.pageNum].get();
   p->load(fileHandle);
-  if (rid.slotNum >= p->records_offset.size() || p->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
-    // RID invalid (larger or has been deleted)
-    p->freeMem();
-    return -1;
-  }
 
   auto &record_offset = p->records_offset[rid.slotNum];
   if (record_offset.first == p->pid) {
@@ -147,19 +142,14 @@ RC RecordBasedFileManager::printRecord(const std::vector<Attribute> &recordDescr
 
 RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const RID &rid) {
-  if (rid.pageNum > pages_.size()) {
-    DB_WARNING << "deleteRecord fail, page num " << rid.pageNum << " no exist";
+
+  if (!isRIDValid(rid, fileHandle)) {
+    DB_WARNING << "deleteRecord failed, RID invalid";
     return -1;
   }
+
   Page *origin_page = pages_[rid.pageNum].get();
   origin_page->load(fileHandle);
-
-  if (origin_page->records_offset.size() <= rid.slotNum
-    || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
-    DB_WARNING << "deleteRecord fail, slot num " << rid.slotNum << " no exist";
-    origin_page->freeMem();
-    return -1;
-  }
 
   auto &offset = origin_page->records_offset[rid.slotNum];
   if (offset.first == origin_page->pid) {
@@ -189,19 +179,13 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vecto
 
 RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const void *data, const RID &rid) {
-  if (rid.pageNum > pages_.size()) {
-    DB_WARNING << "updateRecord fail, page num " << rid.pageNum << " no exist";
+  if (!isRIDValid(rid, fileHandle)) {
+    DB_WARNING << "updateRecord failed, RID invalid";
     return -1;
   }
+
   Page *origin_page = pages_[rid.pageNum].get();
   origin_page->load(fileHandle);
-
-  if (origin_page->records_offset.size() <= rid.slotNum
-    || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
-    DB_WARNING << "updateRecord fail, slot num " << rid.slotNum << " no exist";
-    origin_page->freeMem();
-    return -1;
-  }
 
   /*
    * serialize data just like insert
@@ -274,7 +258,26 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
 
 RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                          const RID &rid, const std::string &attributeName, void *data) {
-  return -1;
+  if (!isRIDValid(rid, fileHandle)) {
+    DB_WARNING << "readAttribute fail, RID invalid";
+    return -1;
+  }
+  auto it = std::find(recordDescriptor.begin(), recordDescriptor.end(), attributeName);
+  if (it == recordDescriptor.end()) {
+    DB_WARNING << "No such attribute: " << attributeName;
+    return -1;
+  }
+  int field_idx = it - recordDescriptor.begin();
+
+  Page *p = pages_[rid.pageNum].get();
+  p->load(fileHandle);
+  auto &record_offset = p->records_offset[rid.slotNum];
+
+  // TODO: finish readAttr
+
+  p->freeMem();
+
+  return 0;
 }
 
 RC RecordBasedFileManager::scan(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
@@ -427,6 +430,23 @@ Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_ha
   }
   appendNewPage(file_handle);
   return pages_.back().get();
+}
+
+bool RecordBasedFileManager::isRIDValid(const RID &rid, FileHandle &file_handle) {
+  if (rid.pageNum > pages_.size()) {
+    DB_WARNING << "RID invalid, page num " << rid.pageNum << " no exist";
+    return false;
+  }
+  Page *origin_page = pages_[rid.pageNum].get();
+  origin_page->load(file_handle);
+
+  if (origin_page->records_offset.size() <= rid.slotNum
+    || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
+    DB_WARNING << "RID invalid, slot num " << rid.slotNum << " no exist";
+    origin_page->freeMem();
+    return false;
+  }
+  return true;
 }
 
 /**************************************
