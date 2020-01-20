@@ -14,7 +14,6 @@ typedef short directory_t; // directories before real data, to indicate offset f
 
 static directory_t MAX_FIELD_NUM = INT16_MAX;
 
-
 // Record ID
 typedef struct {
   unsigned pageNum;    // page number
@@ -93,8 +92,7 @@ class Page {
    * @param sid only specify this when updateRecord redirect back to origin page
    * @return
    */
-  RID insertData(const char *new_data, size_t size, SID sid=FIND_NEW_SID);
-
+  RID insertData(const char *new_data, size_t size, SID sid = FIND_NEW_SID);
 
   /**
    * erase data and update free space accordingly
@@ -108,13 +106,13 @@ class Page {
    * @param record_offset begin offset of record
    * @param out
    * @param recordDescriptor
+   * @param field_idx
    */
-  void readData(PageOffset record_offset, void *out, const std::vector<Attribute> &recordDescriptor);
+  void readData(PageOffset record_offset, void *out, const std::vector<Attribute> &recordDescriptor, int field_idx);
 
 //  std::string ToString() const;
 
   static void initPage(char *page_data);
-
 
   /**
    * all record data after `after_offset` will be shift `switch_offset` bytes forward/backward
@@ -145,10 +143,9 @@ class Page {
 
   static inline unsigned encodeDirectory(std::pair<PID, PageOffset> page_offset);
 
-  static size_t getRecordSize(const char * begin);
+  static size_t getRecordSize(const char *begin);
 
 };
-
 
 SID Page::findNextSlotID() {
   if (invalid_slots_.empty()) return records_offset.size();
@@ -283,9 +280,27 @@ class RecordBasedFileManager {
  private:
   static RecordBasedFileManager *_rbf_manager;
 
+  static constexpr int ALL_FIELD = -1;
+
   PagedFileManager *pfm_;
   std::vector<std::shared_ptr<Page>> pages_;
 //  std::map<size_t, std::unordered_set<Page *>> free_slots_; // assume each page only have one free slot
+
+
+  /**
+   * reuse by `readRecord` and `readAttribute`
+   * @param fileHandle
+   * @param recordDescriptor
+   * @param rid
+   * @param data
+   * @param field_idx
+   * @return
+   */
+  RC readRecordImpl(FileHandle &fileHandle,
+                    const std::vector<Attribute> &recordDescriptor,
+                    const RID &rid,
+                    void *data,
+                    int field_idx = ALL_FIELD);
 
   /**
    * load meta of next page into memory
@@ -307,12 +322,11 @@ class RecordBasedFileManager {
    */
   Page *findAvailableSlot(size_t size, FileHandle &file_handle);
 
-
   static inline directory_t entryDirectoryOverheadLength(int fields_num) {
     return sizeof(directory_t) * (fields_num + 1);
   }
 
-  static std::vector<bool> parseNullIndicator(const unsigned char * data, unsigned fields_num);
+  static std::vector<bool> parseNullIndicator(const unsigned char *data, unsigned fields_num);
 
   /**
    * check Rid and load page, if check valid, Page pointer will be returned, otherwise nullptr
@@ -330,15 +344,21 @@ class RecordBasedFileManager {
    * @param data
    * @return
    */
-  static std::pair<RC, std::vector<char>> serializeRecord(const std::vector<Attribute> &recordDescriptor, const void *data);
+  static std::pair<RC, std::vector<char>> serializeRecord(const std::vector<Attribute> &recordDescriptor,
+                                                          const void *data);
 
   /**
    * decode data from record on page
    * @param recordDescriptor
    * @param out
    * @param src
+   * @param field_idx
+   * @return
    */
-  static void deserializeRecord(const std::vector<Attribute> &recordDescriptor, void *out, const char *src);
+  static RC deserializeRecord(const std::vector<Attribute> &recordDescriptor,
+                                void *out,
+                                const char *src,
+                                int field_idx);
 
 };
 
