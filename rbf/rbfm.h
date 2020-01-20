@@ -53,17 +53,6 @@ typedef enum {
 *****************************************/
 
 
-class Page; // Forward declarations
-
-struct FreeSlot {
-  Page *page;
-  size_t size;
-
-  bool operator<(const FreeSlot &rhs) const {
-    return size < rhs.size;
-  }
-};
-
 /**
  * abstraction of a page, embedded in a vector in rbfm
  */
@@ -109,10 +98,10 @@ class Page {
 
   /**
    * erase data and update free space accordingly
-   * @param record_offset begin offset of record
+   * @param record_begin_offset begin offset of record
    * @return
    */
-  RC deleteRecord(size_t record_offset);
+  RC deleteRecord(size_t record_begin_offset);
 
   /**
    * assume data exist in this page (already redirected, if so)
@@ -129,12 +118,12 @@ class Page {
 
   /**
    * all record data after `after_offset` will be shift `switch_offset` bytes forward/backward
-   * @param after_offset
-   * @param shift_offset
+   * @param record_begin_offset
+   * @param shift_size
    * @param forward
    * @return
    */
-  RC shiftRecords(size_t after_offset, size_t shift_offset, bool forward);
+  RC shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool forward);
 
  private:
 
@@ -189,6 +178,15 @@ unsigned Page::encodeDirectory(std::pair<PID, PageOffset> page_offset) {
   return (page_offset.first << 12) + page_offset.second;
 }
 
+
+struct FreeSlot {
+  Page *page;
+  size_t size;
+
+  bool operator<(const FreeSlot &rhs) const {
+    return size < rhs.size;
+  }
+};
 
 /********************************************************************
 * The scan iterator is NOT required to be implemented for Project 1 *
@@ -344,7 +342,12 @@ class RecordBasedFileManager {
    */
   static void deserializeRecord(const std::vector<Attribute> &recordDescriptor, void *out, const char *src);
 
-
+  /**
+   * Recursively find the exact slot that stores the record, forwarded by potentially a sequence of forwarding pointers
+   * @param record_offset
+   * @return
+   */
+  std::pair<Page *, SID> findForwardingSlot(PID pid, SID sid, FileHandle &fileHandle);
 
 };
 

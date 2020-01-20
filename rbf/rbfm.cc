@@ -168,10 +168,11 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vecto
     origin_page->deleteRecord(data_begin);
   } else {
     // redirect to another page
+    PID redirect_pid = offset.first;
     SID redirect_sid = offset.second;
-    offset = {origin_page->pid, Page::INVALID_OFFSET};
+    offset = {rid.pageNum, Page::INVALID_OFFSET};
 
-    Page *redirect_page = pages_[offset.first].get();
+    Page *redirect_page = pages_[redirect_pid].get();
     redirect_page->load(fileHandle);
     auto &redirect_offset = redirect_page->records_offset[redirect_sid];
     auto data_begin = redirect_offset.second;
@@ -203,9 +204,9 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
    * serialize data just like insert
    */
 
-  // use the array of field offsets method for variable length record introduced in class as the format of record
-  // each record has a leading series of bytes indicating the pointers to each field
   auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
+  if (data_to_be_inserted.first != 0)
+    return -1;  // varchar longer than upper limit
   size_t new_size = data_to_be_inserted.second.size();
 //  DB_DEBUG << "updateRecord TOTAL SIZE " << total_size;
   if (new_size > Page::MAX_SIZE) {
@@ -259,7 +260,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
   } else {
     // shift backward/forward inside cur_page
     size_t shift_offset = std::abs(int(old_size) - int(new_size));
-    cur_page->shiftRecords(cur_offset.second, shift_offset, new_size > old_size);
+    cur_page->shiftAfterRecords(cur_offset.second, shift_offset, new_size > old_size);
   }
 
   origin_page->dump(fileHandle);
@@ -470,10 +471,10 @@ RID Page::insertData(const char *new_data, size_t size, SID sid) {
   return {pid, sid};
 }
 
-RC Page::deleteRecord(size_t record_offset) {
-  size_t record_size = getRecordSize(data + record_offset);
-  shiftRecords(record_offset, record_size, false);
-  real_free_space_ -= record_size;
+RC Page::deleteRecord(size_t record_begin_offset) {
+  size_t record_size = getRecordSize(data + record_begin_offset);
+  shiftAfterRecords(record_begin_offset, record_size, false);
+//  real_free_space_ -= record_size;
   maintainFreeSpace();
   return 0;
 }
@@ -546,27 +547,33 @@ void Page::initPage(char *page_data) {
   *((int *) (page_data + PAGE_SIZE) - 2) = 0; // initial num_slots
 }
 
-RC Page::shiftRecords(size_t after_offset, size_t shift_offset, bool forward) {
+RC Page::shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool forward) {
+  // function that shifts the records after the record beginning at record_begin_offset
   // since records are continuous, we only need to find the start and size of the chunk
-  size_t chunk_start = 0;
+
+  // get the START of the chunk of records to be moved
+  size_t chunk_start = PAGE_SIZE;
   for (auto &offset: records_offset) {
     if (offset.first != pid) continue;           // forwarding to another slot: no need to shift
-    if (offset.second <= after_offset || offset.second == INVALID_OFFSET) continue;  // locates before it or deleted
-    chunk_start = std::max(chunk_start, size_t(offset.second));
-    if (forward) offset.second += shift_offset;
-    else offset.second -= shift_offset;
+    if (offset.second <= record_begin_offset || offset.second == INVALID_OFFSET) continue;  // locates before it or deleted
+    chunk_start = std::min(chunk_start, size_t(offset.second));
+    if (forward) offset.second += shift_size;
+    else offset.second -= shift_size;
   }
   size_t chunk_size = data_end - chunk_start;
   if (forward) {
-    memcpy(data + chunk_start + shift_offset, data + chunk_start, chunk_size);
-    real_free_space_ -= shift_offset;
+    memcpy(data + chunk_start + shift_size, data + chunk_start, chunk_size);
+    memset(data + record_begin_offset, 0, shift_size);
+    real_free_space_ -= shift_size;
     DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
-             << ") forward " << shift_offset << " bytes";
+             << ") forward " << shift_size << " bytes";
   } else {
-    memcpy(data + chunk_start - shift_offset, data + chunk_start, chunk_size);
-    real_free_space_ += shift_offset;
+    memcpy(data + record_begin_offset, data + chunk_start, chunk_size);
+    if (shift_size > chunk_size)
+      memset(data + chunk_size, 0, shift_size - chunk_size); // in case there could be some non-zeros after shifting backward
+    real_free_space_ += shift_size;
     DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back "
-             << shift_offset << " bytes";
+             << shift_size << " bytes";
   }
   maintainFreeSpace();
   return 0;
