@@ -5,7 +5,9 @@
 
 #include <memory>
 #include <unordered_set>
+#include <functional>
 #include <string.h>
+#include <unordered_map>
 
 typedef unsigned short SID; // slod it
 typedef unsigned PID; // page id
@@ -19,6 +21,10 @@ typedef struct {
   unsigned pageNum;    // page number
   unsigned short slotNum;    // slot number in the page
 } RID;
+
+struct RIDHash {
+  std::size_t operator()(const RID &rid) const { return ((size_t) rid.pageNum << 32) ^ ((size_t) rid.slotNum); }
+};
 
 // Attribute
 typedef enum {
@@ -44,6 +50,12 @@ typedef enum {
   NO_OP       // no condition
 } CompOp;
 
+struct EnumHash {
+  template <typename T, typename std::enable_if<std::is_enum<T>::value, T>::type * = nullptr>
+  std::size_t operator()(T t) const {
+    return static_cast<std::size_t>(t);
+  }
+};
 
 /******************************************
  *
@@ -64,8 +76,10 @@ class Page {
 
  public:
 
-  static constexpr size_t MAX_SIZE = PAGE_SIZE - 3 * sizeof(int);
-  static constexpr SID FIND_NEW_SID = UINT16_MAX;
+  static const size_t MAX_SIZE;
+  static const SID FIND_NEW_SID;
+  static const unsigned INVALID_OFFSET;  // PageOffset value to indicate a deleted slot
+  static const unsigned REDIRECT_PID; // PID value to indicate the slot is forwarded from other slot
 
   PID pid;
   /*
@@ -106,9 +120,19 @@ class Page {
    * @param record_offset begin offset of record
    * @param out
    * @param recordDescriptor
-   * @param field_idx
+   * @param projected_fields
+   * @param cmp
+   * @param cond_field_idx
+   * @param cond_value
+   * @return if return code is COND_NOT_SATISFIED, nothing will be written to out
    */
-  void readData(PageOffset record_offset, void *out, const std::vector<Attribute> &recordDescriptor, int field_idx);
+  RC readData(PageOffset record_offset,
+                void *out,
+                const std::vector<Attribute> &recordDescriptor,
+                const std::vector<bool> &projected_fields,
+                CompOp cmp = CompOp::NO_OP,
+                int cond_field_idx = -1,
+                void *cond_value = nullptr);
 
 //  std::string ToString() const;
 
@@ -124,10 +148,6 @@ class Page {
   RC shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool forward);
 
  private:
-
-  static constexpr unsigned INVALID_OFFSET = 0xfff;  // PageOffset value to indicate a deleted slot
-  static constexpr unsigned FORWARDED_SLOT = 0xfffff; // PID value to indicate the slot is forwarded from other slot
-  static constexpr RC REDIRECT = 2;
 
   void parseMeta();
 
@@ -151,7 +171,6 @@ class Page {
   static size_t getRecordSize(const char *begin);
 
 };
-
 
 SID Page::findNextSlotID() {
   if (invalid_slots_.empty()) return records_offset.size();
@@ -203,40 +222,47 @@ class RBFM_ScanIterator {
 
   static constexpr PID INVALID_PID = UINT32_MAX;
 
-  RecordBasedFileManager * rbfm;
-  PID pid;
-  SID sid;
-  std::vector<Attribute> &record_descriptor_;
-  std::string &condition_attribute_;
+  RecordBasedFileManager *rbfm_;
+  FileHandle *file_handle_;
+  std::shared_ptr<Page> page_;
+  PID pid_;
+  SID sid_;
+  std::vector<Attribute> record_descriptor_;
+  std::vector<bool> projected_fields_;
+  std::unordered_map<RID, RID, RIDHash> redirect_map_; // redirected_rid to origin_rid
+  int condition_attr_idx_;
   CompOp comp_op_;
   const void *value_;
-  std::vector<std::string> &attribute_names_;
 
  public:
   RBFM_ScanIterator();
 
   ~RBFM_ScanIterator() = default;;
 
-  RC init(PID page_idx, SID slot_idx);
-
   // Never keep the results in the memory. When getNextRecord() is called,
   // a satisfying record needs to be fetched from the file.
   // "data" follows the same format as RecordBasedFileManager::insertRecord().
-  RC getNextRecord(RID &rid, void *data) { return RBFM_EOF; };
+  RC getNextRecord(RID &rid, void *data);
 
   RC close();
 
-  void init(FileHandle &fileHandle,
-             const std::vector<Attribute> &recordDescriptor,
-             const std::string &conditionAttribute,
-             const CompOp compOp,
-             const void *value,
-             const std::vector<std::string> &attributeNames);
+  RC init(
+      FileHandle &fileHandle,
+      RecordBasedFileManager *rbfm,
+      const std::vector<Attribute> &recordDescriptor,
+      const std::string &conditionAttribute,
+      CompOp compOp,
+      const void *value,
+      const std::vector<std::string> &attributeNames);
 
 };
 
 class RecordBasedFileManager {
+  friend class RBFM_ScanIterator;
  public:
+
+  static const RC COND_NOT_SATISFIED;
+
   static RecordBasedFileManager &instance();                          // Access to the _rbf_manager instance
 
   RC createFile(const std::string &fileName);                         // Create a new record-based file
@@ -309,8 +335,6 @@ class RecordBasedFileManager {
  private:
   static RecordBasedFileManager *_rbf_manager;
 
-  static constexpr int ALL_FIELD = -1;
-
   PagedFileManager *pfm_;
   std::vector<std::shared_ptr<Page>> pages_;
 //  std::map<size_t, std::unordered_set<Page *>> free_slots_; // assume each page only have one free slot
@@ -322,14 +346,14 @@ class RecordBasedFileManager {
    * @param recordDescriptor
    * @param rid
    * @param data
-   * @param field_idx
+   * @param projected_fields
    * @return
    */
   RC readRecordImpl(FileHandle &fileHandle,
                     const std::vector<Attribute> &recordDescriptor,
                     const RID &rid,
                     void *data,
-                    int field_idx = ALL_FIELD);
+                    const std::vector<bool> &projected_fields);
 
   /**
    * load meta of next page into memory
@@ -381,13 +405,24 @@ class RecordBasedFileManager {
    * @param recordDescriptor
    * @param out
    * @param src
-   * @param field_idx
+   * @param projected_fields
+   * @param cmp
+   * @param cond_field_idx
+   * @param cond_value
    * @return
    */
   static RC deserializeRecord(const std::vector<Attribute> &recordDescriptor,
-                                void *out,
-                                const char *src,
-                                int field_idx);
+                              void *out,
+                              const char *src,
+                              const std::vector<bool> &projected_fields,
+                              CompOp cmp,
+                              int cond_field_idx,
+                              void *cond_value);
+
+  static bool cmpAttr(CompOp cmp,
+                      AttrType type,
+                      const void *val1,
+                      const void *val2;
 
 };
 

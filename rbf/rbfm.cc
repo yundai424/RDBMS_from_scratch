@@ -4,6 +4,8 @@
 
 RecordBasedFileManager *RecordBasedFileManager::_rbf_manager = nullptr;
 
+const RC RecordBasedFileManager::COND_NOT_SATISFIED = 3;
+
 RecordBasedFileManager &RecordBasedFileManager::instance() {
   static RecordBasedFileManager _rbf_manager = RecordBasedFileManager();
   return _rbf_manager;
@@ -72,7 +74,7 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vecto
 
 RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                       const RID &rid, void *data) {
-  return readRecordImpl(fileHandle, recordDescriptor, rid, data);
+  return readRecordImpl(fileHandle, recordDescriptor, rid, data, std::vector<bool>(recordDescriptor.size(), true));
 }
 
 RC RecordBasedFileManager::printRecord(const std::vector<Attribute> &recordDescriptor, const void *data) {
@@ -212,7 +214,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
       // new_page->records_offset[origin_sid] will be updated accordingly
     } else {
       RID new_rid = new_page->insertData(data_to_be_inserted.second.data(), new_size);
-      new_page->records_offset[new_rid.slotNum].first = Page::FORWARDED_SLOT;
+      new_page->records_offset[new_rid.slotNum].first = Page::REDIRECT_PID;
       origin_page->records_offset[rid.slotNum] = {new_rid.pageNum, new_rid.slotNum};
     }
     if (new_page != origin_page) new_page->dump(fileHandle);
@@ -232,46 +234,25 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
 RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                          const RID &rid, const std::string &attributeName, void *data) {
 
-  auto it = std::find(recordDescriptor.begin(), recordDescriptor.end(), attributeName);
+  auto it = std::find_if(recordDescriptor.begin(),
+                         recordDescriptor.end(),
+                         [&](const Attribute &attr) { return attr.name == attributeName; });
   if (it == recordDescriptor.end()) {
     DB_WARNING << "No such attribute: " << attributeName;
     return -1;
   }
   int field_idx = it - recordDescriptor.begin();
+  std::vector<bool> projected_fields(recordDescriptor.size(), false);
+  projected_fields[field_idx] = true;
 
-  return readRecordImpl(fileHandle, recordDescriptor, rid, data, field_idx);
+  return readRecordImpl(fileHandle, recordDescriptor, rid, data, projected_fields);
 }
 
 RC RecordBasedFileManager::scan(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                 const std::string &conditionAttribute, const CompOp compOp, const void *value,
                                 const std::vector<std::string> &attributeNames, RBFM_ScanIterator &rbfm_ScanIterator) {
-  return -1;
+  return rbfm_ScanIterator.init(fileHandle, this, recordDescriptor, conditionAttribute, compOp, value, attributeNames);
 }
-
-/**************************************
- *
- * ========= Scan Iterator ==========
- *
- *************************************/
-
-RC RBFM_ScanIterator::close() {
-  return RecordBasedFileManager::instance().closeFile(file_handle_);
-}
-
-void RBFM_ScanIterator::init(class FileHandle &fileHandle,
-                             const std::vector<Attribute> &recordDescriptor,
-                             const std::string &conditionAttribute,
-                             const CompOp compOp,
-                             const void *value,
-                             const std::vector<std::string> &attributeNames) {
-  RecordBasedFileManager::instance().openFile(fileHandle.name, file_handle_); // init fileHandle
-  record_descriptor_ = recordDescriptor;
-  condition_attribute_ = conditionAttribute;
-  comp_op_ = compOp;
-  value_ = value;
-  attribute_names_ = attributeNames;
-}
-
 
 /**************************************
  *
@@ -284,7 +265,7 @@ RC RecordBasedFileManager::readRecordImpl(FileHandle &fileHandle,
                                           const std::vector<Attribute> &recordDescriptor,
                                           const RID &rid,
                                           void *data,
-                                          int field_idx) {
+                                          const std::vector<bool> &projected_fields) {
   auto ret = loadPageWithRid(rid, fileHandle);
   if (!ret.first) {
     DB_WARNING << "readRecord failed, rid not exist";
@@ -296,8 +277,8 @@ RC RecordBasedFileManager::readRecordImpl(FileHandle &fileHandle,
   auto &record_offset = origin_page->records_offset[rid.slotNum];
   if (record_offset.first == origin_page->pid) {
     // in the same page: directly read the record starting at PageOffset
-    origin_page->readData(record_offset.second, data, recordDescriptor, field_idx);
-  } else if (record_offset.first == Page::FORWARDED_SLOT) {
+    origin_page->readData(record_offset.second, data, recordDescriptor, projected_fields);
+  } else if (record_offset.first == Page::REDIRECT_PID) {
     DB_ERROR << "Illegal direct access to a forwarded slot: " << rid.pageNum << " " << rid.slotNum;
     return -1;
   } else {
@@ -306,7 +287,7 @@ RC RecordBasedFileManager::readRecordImpl(FileHandle &fileHandle,
     redirect_page->load(fileHandle);
     // if redirected, we use offset to indicate SID in the redirected page
     PageOffset real_offset = redirect_page->records_offset[record_offset.second].second;
-    redirect_page->readData(real_offset, data, recordDescriptor, field_idx);
+    redirect_page->readData(real_offset, data, recordDescriptor, projected_fields);
     redirect_page->freeMem();
   }
   origin_page->freeMem();
@@ -325,8 +306,8 @@ void RecordBasedFileManager::loadNextPage(FileHandle &fileHandle) {
 }
 
 void RecordBasedFileManager::appendNewPage(FileHandle &file_handle) {
-  if (pages_.size() == Page::FORWARDED_SLOT) {
-    DB_ERROR << "Exceed max page num " << Page::FORWARDED_SLOT;
+  if (pages_.size() == Page::REDIRECT_PID) {
+    DB_ERROR << "Exceed max page num " << Page::REDIRECT_PID;
     throw std::runtime_error("exceed max page num");
   }
   char new_page[PAGE_SIZE];
@@ -401,10 +382,14 @@ RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDesc
 RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recordDescriptor,
                                              void *out,
                                              const char *src,
-                                             int field_idx) {
+                                             const std::vector<bool> &projected_fields,
+                                             CompOp cmp,
+                                             int cond_field_idx,
+                                             void *cond_value) {
 
   // 1. make null indicator
-  int indicator_bytes_num = int(ceil(double(recordDescriptor.size()) / 8));
+  int projected_fields_num = std::count(projected_fields.begin(), projected_fields.end(), true);
+  int indicator_bytes_num = int(ceil(double(projected_fields_num) / 8));
   unsigned char indicator_bytes[indicator_bytes_num];
   memset(indicator_bytes, 0, indicator_bytes_num);
   unsigned char *pt = indicator_bytes;
@@ -416,54 +401,52 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
     return -1;
   }
   std::vector<int> fields_offset;
-  for (int i = 0; i < field_num; ++i) {
+  for (int i = 0, j = 0; i < field_num; ++i) {
     fields_offset.push_back(*dir_pt++);
-    if (fields_offset.back() == -1) {
-      unsigned char mask = 1 << (7 - (i % 8));
-      *pt = *pt | mask;
+    if (projected_fields[i]) {
+      // if field projected, set null indicator
+      if (fields_offset.back() == -1) {
+        unsigned char mask = 1 << (7 - (j % 8));
+        *pt = *pt | mask;
+      }
+      ++j;
+      if (j % 8 == 7) ++pt;
     }
-    if (i % 8 == 7) ++pt;
   }
 
   char *out_pt = (char *) out;
-  if (field_idx == ALL_FIELD) {
-    memcpy(out, indicator_bytes, indicator_bytes_num);
-    out_pt += indicator_bytes_num;
+
+  // 2. compare if condition is given
+  if (cmp != CompOp::NO_OP) {
+    size_t cond_field_start = entryDirectoryOverheadLength(field_num);
+    for (int i = cond_field_idx - 1; i >= 0; --i) {
+      if (fields_offset[i] != -1) {
+        cond_field_start = fields_offset[i];
+        break;
+      }
+    }
+    if (!cmpAttr(cmp, recordDescriptor[cond_field_idx].type, src + cond_field_start, cond_value)) {
+      return COND_NOT_SATISFIED;
+    }
   }
 
+  memcpy(out, indicator_bytes, indicator_bytes_num);
+  out_pt += indicator_bytes_num;
 
-  // 2. write data
+  // 3. write data
   size_t directory_size = entryDirectoryOverheadLength(field_num);
-  if (field_idx == ALL_FIELD) {
-    /*
-     * read all field
-     */
-    size_t record_end = directory_size;
-    for (auto k = fields_offset.size() - 1; k >= 0; k--) {
-      if (fields_offset[k] != 0) {
-        record_end = fields_offset[k];
-        break;
-      }
-    }
-    memcpy(out_pt, src + directory_size, record_end - directory_size);
-  } else {
-    /*
-     * read field specified by field_idx
-     */
-    // TODO: not sure how to handle NULL field
-    if (fields_offset[field_idx] == -1) {
-      return 0;
-    }
-    size_t field_start = directory_size; // if all previous fields are null then it should be directory_size
-    for (int i = field_idx - 1; i >= 0; --i)
-      if (fields_offset[i] != -1) {
-        field_start = fields_offset[i];
-        break;
-      }
+  src += directory_size; // begin of real data
 
-    size_t field_size = fields_offset[field_idx] - field_start;
-    DB_DEBUG << "Read attribute with size " << field_size;
-    memcpy(out_pt, src + field_start, field_size);
+  size_t prev_offset = directory_size;
+  for (int i = 0; i < fields_offset.size(); ++i) {
+    if (fields_offset[i] == -1) continue; // null
+    unsigned field_size = fields_offset[i] - prev_offset;
+    prev_offset = fields_offset[i];
+    // here we don't need to handle varchar as special case,
+    // since we already store that int for varchar len
+    if (projected_fields[i]) memcpy(out_pt, src, field_size);
+    src += field_size;
+    out_pt += field_size;
   }
 
   return 0;
@@ -488,7 +471,8 @@ std::pair<bool, Page *> RecordBasedFileManager::loadPageWithRid(const RID &rid, 
   origin_page->load(file_handle);
 
   if (rid.slotNum > origin_page->records_offset.size()
-      || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET) {
+      || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET
+      || origin_page->records_offset[rid.slotNum].first == Page::REDIRECT_PID) {
     DB_WARNING << "RID invalid, slot num " << rid.slotNum << " no exist";
     origin_page->freeMem();
     return {false, nullptr};
@@ -496,11 +480,60 @@ std::pair<bool, Page *> RecordBasedFileManager::loadPageWithRid(const RID &rid, 
   return {true, origin_page};
 }
 
+bool RecordBasedFileManager::cmpAttr(CompOp cmp,
+                                     AttrType type,
+                                     const void *val1,
+                                     const void *val2) {
+  static const std::unordered_map<CompOp, std::function<bool(int, int)>, EnumHash> int_op_map{
+      {CompOp::EQ_OP, std::equal_to<int>()},
+      {CompOp::NE_OP, std::equal_to<int>()},
+      {CompOp::LT_OP, std::less<int>()},
+      {CompOp::LE_OP, std::less_equal<int>()},
+      {CompOp::GT_OP, std::greater<int>()},
+      {CompOp::GE_OP, std::greater_equal<int>()},
+  };
+  static const std::unordered_map<CompOp, std::function<bool(float, float)>, EnumHash> float_op_map{
+      {CompOp::EQ_OP, std::equal_to<float>()},
+      {CompOp::NE_OP, std::equal_to<float>()},
+      {CompOp::LT_OP, std::less<float>()},
+      {CompOp::LE_OP, std::less_equal<float>()},
+      {CompOp::GT_OP, std::greater<float>()},
+      {CompOp::GE_OP, std::greater_equal<float>()},
+  };
+  static const std::unordered_map<CompOp, std::function<bool(const char *, const char *)>, EnumHash> char_op_map{
+      {CompOp::EQ_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) == 0; }},
+      {CompOp::NE_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) != 0; }},
+      {CompOp::LT_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) < 0; }},
+      {CompOp::LE_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) <= 0; }},
+      {CompOp::GT_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) > 0; }},
+      {CompOp::GE_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) >= 0; }},
+  };
+
+  const int *val1_int, *val2_int;
+  const float *val1_float, *val2_float;
+  const char *val1_char, *val2_char;
+  if (type == AttrType::TypeInt) {
+
+    return int_op_map.at(cmp)(*static_cast<const int *>(val1), *static_cast<const int *>(val2));
+  } else if (type == AttrType::TypeReal) {
+    return float_op_map.at(cmp)(*static_cast<const float *>(val1), *static_cast<const float *>(val2));
+  } else {
+    return char_op_map.at(cmp)(static_cast<const char *>(val1), static_cast<const char *>(val2));
+  }
+  DB_ERROR << "Unrecognized AttrType " << type;
+  return false;
+}
+
 /**************************************
  *
  * ========= PAGE CLASS ==========
  *
  *************************************/
+
+const size_t Page::MAX_SIZE = PAGE_SIZE - 3 * sizeof(int);
+const SID Page::FIND_NEW_SID = UINT16_MAX;
+const unsigned Page::INVALID_OFFSET = 0xfff;  // PageOffset value to indicate a deleted slot
+const unsigned Page::REDIRECT_PID = 0xfffff;
 
 Page::Page(PID page_id) : pid(page_id), data(nullptr), data_end(0) {}
 
@@ -549,12 +582,20 @@ RC Page::deleteRecord(size_t record_begin_offset) {
   return 0;
 }
 
-void Page::readData(PageOffset record_offset,
-                    void *out,
-                    const std::vector<Attribute> &recordDescriptor,
-                    int field_idx) {
-//  DB_DEBUG << print_bytes(data,40);
-  RecordBasedFileManager::deserializeRecord(recordDescriptor, out, data + record_offset, field_idx);
+RC Page::readData(PageOffset record_offset,
+                  void *out,
+                  const std::vector<Attribute> &recordDescriptor,
+                  const std::vector<bool> &projected_fields,
+                  CompOp cmp,
+                  int cond_field_idx,
+                  void *cond_value) {
+  return RecordBasedFileManager::deserializeRecord(recordDescriptor,
+                                                   out,
+                                                   data + record_offset,
+                                                   projected_fields,
+                                                   cmp,
+                                                   cond_field_idx,
+                                                   cond_value);
 }
 
 void Page::dump(FileHandle &handle) {
@@ -682,20 +723,120 @@ void Page::checkDataend() {
 
 }
 
-/*
- * RBFM_ScanIterator
- */
+/**************************************
+ *
+ * ========= RBFM_ScanIterator ==========
+ *
+ *************************************/
 
-RBFM_ScanIterator::RBFM_ScanIterator() : pid(INVALID_PID) {}
-
-RC RBFM_ScanIterator::init(PID page_idx, SID slot_idx) {
-  pid = page_idx;
-  sid = slot_idx;
-}
+RBFM_ScanIterator::RBFM_ScanIterator() : pid_(INVALID_PID) {}
 
 RC RBFM_ScanIterator::close() {
-  pid = INVALID_PID;
+  if (page_) page_->freeMem();
+  page_.reset();
+  pid_ = INVALID_PID;
   return 0;
+}
+
+RC RBFM_ScanIterator::init(FileHandle &fileHandle,
+                           RecordBasedFileManager *rbfm,
+                           const std::vector<Attribute> &recordDescriptor,
+                           const std::string &conditionAttribute,
+                           CompOp compOp,
+                           const void *value,
+                           const std::vector<std::string> &attributeNames) {
+  file_handle_ = &fileHandle;
+  rbfm_ = rbfm;
+  pid_ = 0;
+  sid_ = 0;
+  redirect_map_.clear();
+  record_descriptor_ = recordDescriptor;
+  projected_fields_ = std::vector<bool>(record_descriptor_.size(), false);
+  comp_op_ = compOp;
+  value_ = value;
+
+  // parse projected fields
+  for (auto &attr: attributeNames) {
+    bool found = false;
+    for (int i = 0; i < record_descriptor_.size(); ++i) {
+      if (record_descriptor_[i].name == attr) {
+        found = true;
+        projected_fields_[i] = true;
+        break;
+      }
+    }
+    if (!found) {
+      DB_ERROR << "attribute " << attr << " not found in recordDescriptor";
+      return -1;
+    }
+  }
+
+  // parse condition fields
+  if (comp_op_ == CompOp::NO_OP) {
+    auto it = std::find_if(record_descriptor_.begin(), record_descriptor_.end(), [&](const Attribute &attr) {
+      return attr.name == conditionAttribute;
+    });
+    if (it == record_descriptor_.end()) {
+      DB_ERROR << "condition attribute " << conditionAttribute << " not found in recordDescriptor";
+      return -1;
+    }
+    condition_attr_idx_ = it - record_descriptor_.begin();
+  }
+
+  return 0;
+}
+
+RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
+  while (pid_ != INVALID_PID) {
+    if ((pid_ == 0 && sid_ == 0) || sid_ == page_->records_offset.size()) {
+      // load next page
+      if (pid_ > 0) {
+        page_->freeMem();
+        page_.reset();
+        ++pid_;
+      }
+      // EOF
+      if (pid_ == rbfm_->pages_.size()) {
+        pid_ = INVALID_PID;
+        break;
+      }
+      page_ = std::make_shared<Page>(pid_);
+      page_->load(*file_handle_);
+      sid_ = 0;
+    } else ++sid_;
+    // read next record
+    auto &offset = page_->records_offset[sid_];
+    std::shared_ptr<Page> actual_page = page_;
+    rid = {pid_, sid_};
+    if (offset.first != page_->pid) {
+      // TODO: scan by physical page layout, but we need to know which page is a record redirected from
+      // maybe encode in highest bit in its PID
+//      if (offset.first != Page::REDIRECT_PID) {
+//        // redirected to another page
+//        redirect_map_[rid] = {offset.first, static_cast<unsigned short>(offset.second)};
+//      } else {
+//        // redirected from another page
+//      }
+      if (offset.first == Page::REDIRECT_PID) {
+        continue;
+      }
+      rid = {offset.first, static_cast<unsigned short>(offset.second)};
+      actual_page = std::make_shared<Page>(rid.pageNum);
+      actual_page->load(*file_handle_);
+    }
+    RC ret = actual_page->readData(offset.second, data, record_descriptor_, projected_fields_);
+
+    if (actual_page != page_) {
+      // redirected page
+      actual_page->freeMem();
+    }
+    
+    if (ret == RecordBasedFileManager::COND_NOT_SATISFIED) continue;
+    else return 0;
+  }
+  DB_ERROR << "iterator not init or reach EOF";
+  return RBFM_EOF;
+
 }
 
 
