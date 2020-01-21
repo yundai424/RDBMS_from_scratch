@@ -415,18 +415,14 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
     /*
      * read all field
      */
-    src += directory_size; // begin of real data
-    size_t prev_offset = directory_size;
-    for (int o : fields_offset) {
-      if (o == -1) continue; // null
-      unsigned field_size = o - prev_offset;
-      // here we don't need to handle varchar as special case,
-      // since we already store that int for varchar len
-      memcpy(out_pt, src, field_size);
-      src += field_size;
-      out_pt += field_size;
-      prev_offset = o;
+    size_t record_end = directory_size;
+    for (auto k = fields_offset.size() - 1; k >= 0; k--) {
+      if (fields_offset[k] != 0) {
+        record_end = fields_offset[k];
+        break;
+      }
     }
+    memcpy(out_pt, src + directory_size, record_end - directory_size);
   } else {
     /*
      * read field specified by field_idx
