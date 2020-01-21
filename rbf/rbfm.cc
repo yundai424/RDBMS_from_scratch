@@ -154,6 +154,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
   auto ret = loadPageWithRid(rid, fileHandle);
   if (!ret.first) {
     DB_WARNING << "updateRecord failed, RID invalid";
+    ret.second->freeMem();
     return -1;
   }
 
@@ -263,6 +264,7 @@ RC RecordBasedFileManager::readRecordImpl(FileHandle &fileHandle,
   auto ret = loadPageWithRid(rid, fileHandle);
   if (!ret.first) {
     DB_WARNING << "readRecord failed, rid not exist";
+    ret.second->freeMem();
     return -1;
   }
 
@@ -435,7 +437,10 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
     }
     size_t field_start = directory_size; // if all previous fields are null then it should be derectory_size
     for (int i = field_idx - 1; i >= 0; --i)
-      if (fields_offset[i] != -1) field_start = fields_offset[i];
+      if (fields_offset[i] != -1) {
+        field_start = fields_offset[i];
+        break;
+      }
 
     size_t field_size = fields_offset[field_idx] - field_start;
     DB_DEBUG << "Read attribute with size " << field_size;
@@ -530,7 +535,7 @@ void Page::readData(PageOffset record_offset,
                     const std::vector<Attribute> &recordDescriptor,
                     int field_idx) {
 //  DB_DEBUG << print_bytes(data,40);
-  RecordBasedFileManager::deserializeRecord(recordDescriptor, out, data + record_offset);
+  RecordBasedFileManager::deserializeRecord(recordDescriptor, out, data + record_offset, field_idx);
 }
 
 void Page::dump(FileHandle &handle) {
