@@ -251,6 +251,31 @@ RC RecordBasedFileManager::scan(FileHandle &fileHandle, const std::vector<Attrib
 
 /**************************************
  *
+ * ========= Scan Iterator ==========
+ *
+ *************************************/
+
+RC RBFM_ScanIterator::close() {
+  return RecordBasedFileManager::instance().closeFile(file_handle_);
+}
+
+void RBFM_ScanIterator::init(class FileHandle &fileHandle,
+                             const std::vector<Attribute> &recordDescriptor,
+                             const std::string &conditionAttribute,
+                             const CompOp compOp,
+                             const void *value,
+                             const std::vector<std::string> &attributeNames) {
+  RecordBasedFileManager::instance().openFile(fileHandle.name, file_handle_); // init fileHandle
+  record_descriptor_ = recordDescriptor;
+  condition_attribute_ = conditionAttribute;
+  comp_op_ = compOp;
+  value_ = value;
+  attribute_names_ = attributeNames;
+}
+
+
+/**************************************
+ *
  * ========= Utility functions ==========
  *
  *************************************/

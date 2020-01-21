@@ -203,7 +203,25 @@ class RBFM_ScanIterator {
   // "data" follows the same format as RecordBasedFileManager::insertRecord().
   RC getNextRecord(RID &rid, void *data) { return RBFM_EOF; };
 
-  RC close() { return -1; };
+  void init(FileHandle &fileHandle,
+             const std::vector<Attribute> &recordDescriptor,
+             const std::string &conditionAttribute,
+             const CompOp compOp,
+             const void *value,
+             const std::vector<std::string> &attributeNames);
+
+  RC close();
+
+ private:
+  PID cur_pid_;
+  SID cur_sid_;
+
+  FileHandle &file_handle_;
+  std::vector<Attribute> &record_descriptor_;
+  std::string &condition_attribute_;
+  CompOp comp_op_;
+  const void *value_;
+  std::vector<std::string> &attribute_names_;
 };
 
 class RecordBasedFileManager {
