@@ -143,9 +143,15 @@ class Page {
 
   static inline unsigned encodeDirectory(std::pair<PID, PageOffset> page_offset);
 
+  /**
+   * the record size include the heading directories
+   * @param begin
+   * @return
+   */
   static size_t getRecordSize(const char *begin);
 
 };
+
 
 SID Page::findNextSlotID() {
   if (invalid_slots_.empty()) return records_offset.size();
@@ -193,17 +199,23 @@ unsigned Page::encodeDirectory(std::pair<PID, PageOffset> page_offset) {
 class RBFM_ScanIterator {
   friend class Page;
 
+  static constexpr PID INVALID_PID = UINT32_MAX;
+  PID pid;
+  SID sid;
+
  public:
-  RBFM_ScanIterator() = default;;
+  RBFM_ScanIterator();
 
   ~RBFM_ScanIterator() = default;;
+
+  RC init(PID page_idx, SID slot_idx);
 
   // Never keep the results in the memory. When getNextRecord() is called,
   // a satisfying record needs to be fetched from the file.
   // "data" follows the same format as RecordBasedFileManager::insertRecord().
   RC getNextRecord(RID &rid, void *data) { return RBFM_EOF; };
 
-  RC close() { return -1; };
+  RC close();
 };
 
 class RecordBasedFileManager {

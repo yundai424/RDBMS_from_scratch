@@ -433,7 +433,7 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
     if (fields_offset[field_idx] == -1) {
       return 0;
     }
-    size_t field_start = directory_size; // if all previous fields are null then it should be derectory_size
+    size_t field_start = directory_size; // if all previous fields are null then it should be directory_size
     for (int i = field_idx - 1; i >= 0; --i)
       if (fields_offset[i] != -1) field_start = fields_offset[i];
 
@@ -530,7 +530,7 @@ void Page::readData(PageOffset record_offset,
                     const std::vector<Attribute> &recordDescriptor,
                     int field_idx) {
 //  DB_DEBUG << print_bytes(data,40);
-  RecordBasedFileManager::deserializeRecord(recordDescriptor, out, data + record_offset);
+  RecordBasedFileManager::deserializeRecord(recordDescriptor, out, data + record_offset, field_idx);
 }
 
 void Page::dump(FileHandle &handle) {
@@ -656,6 +656,22 @@ void Page::checkDataend() {
     throw std::runtime_error(
         "data end not match " + std::to_string(last_record_size + last_record_begin) + ":" + std::to_string(data_end));
 
+}
+
+/*
+ * RBFM_ScanIterator
+ */
+
+RBFM_ScanIterator::RBFM_ScanIterator() : pid(INVALID_PID) {}
+
+RC RBFM_ScanIterator::init(PID page_idx, SID slot_idx) {
+  pid = page_idx;
+  sid = slot_idx;
+}
+
+RC RBFM_ScanIterator::close() {
+  pid = INVALID_PID;
+  return 0;
 }
 
 
