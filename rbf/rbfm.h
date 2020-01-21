@@ -196,12 +196,21 @@ unsigned Page::encodeDirectory(std::pair<PID, PageOffset> page_offset) {
 //  }
 //  rbfmScanIterator.close();
 
+class RecordBasedFileManager;
+
 class RBFM_ScanIterator {
   friend class Page;
 
   static constexpr PID INVALID_PID = UINT32_MAX;
+
+  RecordBasedFileManager * rbfm;
   PID pid;
   SID sid;
+  std::vector<Attribute> &record_descriptor_;
+  std::string &condition_attribute_;
+  CompOp comp_op_;
+  const void *value_;
+  std::vector<std::string> &attribute_names_;
 
  public:
   RBFM_ScanIterator();
@@ -216,6 +225,14 @@ class RBFM_ScanIterator {
   RC getNextRecord(RID &rid, void *data) { return RBFM_EOF; };
 
   RC close();
+
+  void init(FileHandle &fileHandle,
+             const std::vector<Attribute> &recordDescriptor,
+             const std::string &conditionAttribute,
+             const CompOp compOp,
+             const void *value,
+             const std::vector<std::string> &attributeNames);
+
 };
 
 class RecordBasedFileManager {

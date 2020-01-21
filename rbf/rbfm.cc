@@ -250,6 +250,31 @@ RC RecordBasedFileManager::scan(FileHandle &fileHandle, const std::vector<Attrib
 
 /**************************************
  *
+ * ========= Scan Iterator ==========
+ *
+ *************************************/
+
+RC RBFM_ScanIterator::close() {
+  return RecordBasedFileManager::instance().closeFile(file_handle_);
+}
+
+void RBFM_ScanIterator::init(class FileHandle &fileHandle,
+                             const std::vector<Attribute> &recordDescriptor,
+                             const std::string &conditionAttribute,
+                             const CompOp compOp,
+                             const void *value,
+                             const std::vector<std::string> &attributeNames) {
+  RecordBasedFileManager::instance().openFile(fileHandle.name, file_handle_); // init fileHandle
+  record_descriptor_ = recordDescriptor;
+  condition_attribute_ = conditionAttribute;
+  comp_op_ = compOp;
+  value_ = value;
+  attribute_names_ = attributeNames;
+}
+
+
+/**************************************
+ *
  * ========= Utility functions ==========
  *
  *************************************/
@@ -413,18 +438,14 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
     /*
      * read all field
      */
-    src += directory_size; // begin of real data
-    size_t prev_offset = directory_size;
-    for (int o : fields_offset) {
-      if (o == -1) continue; // null
-      unsigned field_size = o - prev_offset;
-      // here we don't need to handle varchar as special case,
-      // since we already store that int for varchar len
-      memcpy(out_pt, src, field_size);
-      src += field_size;
-      out_pt += field_size;
-      prev_offset = o;
+    size_t record_end = directory_size;
+    for (auto k = fields_offset.size() - 1; k >= 0; k--) {
+      if (fields_offset[k] != 0) {
+        record_end = fields_offset[k];
+        break;
+      }
     }
+    memcpy(out_pt, src + directory_size, record_end - directory_size);
   } else {
     /*
      * read field specified by field_idx
@@ -435,7 +456,10 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
     }
     size_t field_start = directory_size; // if all previous fields are null then it should be directory_size
     for (int i = field_idx - 1; i >= 0; --i)
-      if (fields_offset[i] != -1) field_start = fields_offset[i];
+      if (fields_offset[i] != -1) {
+        field_start = fields_offset[i];
+        break;
+      }
 
     size_t field_size = fields_offset[field_idx] - field_start;
     DB_DEBUG << "Read attribute with size " << field_size;
