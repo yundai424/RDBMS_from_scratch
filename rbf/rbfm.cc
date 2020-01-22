@@ -455,6 +455,9 @@ Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_ha
   // find the first available free slot to insert data
   // will also handle creating new page / new slot when there's no available one
   for (auto p : pages_) {
+    // TODO: I think here should be `p->free_space >= size`,
+    //  since free_space already reserved sizeof(unsigned) as we maintain internally
+//    if (p->free_space >= size) return p.get();
     if (p->free_space >= size + sizeof(unsigned)) return p.get();
   }
   appendNewPage(file_handle);

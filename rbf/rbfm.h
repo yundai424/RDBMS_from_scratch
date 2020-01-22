@@ -51,7 +51,7 @@ typedef enum {
 } CompOp;
 
 struct EnumHash {
-  template <typename T, typename std::enable_if<std::is_enum<T>::value, T>::type * = nullptr>
+  template<typename T, typename std::enable_if<std::is_enum<T>::value, T>::type * = nullptr>
   std::size_t operator()(T t) const {
     return static_cast<std::size_t>(t);
   }
@@ -127,12 +127,12 @@ class Page {
    * @return if return code is COND_NOT_SATISFIED, nothing will be written to out
    */
   RC readData(PageOffset record_offset,
-                void *out,
-                const std::vector<Attribute> &recordDescriptor,
-                const std::vector<bool> &projected_fields,
-                CompOp cmp = CompOp::NO_OP,
-                int cond_field_idx = -1,
-                void *cond_value = nullptr);
+              void *out,
+              const std::vector<Attribute> &recordDescriptor,
+              const std::vector<bool> &projected_fields,
+              CompOp cmp = CompOp::NO_OP,
+              int cond_field_idx = -1,
+              void *cond_value = nullptr);
 
 
 //  std::string ToString() const;
@@ -353,11 +353,6 @@ class RecordBasedFileManager {
                     const RID &rid,
                     void *data,
                     const std::vector<bool> &projected_fields);
-<<<<<<< HEAD
-=======
-
-
->>>>>>> yundai/proj2
 
   /**
    * load meta of next page into memory
@@ -410,18 +405,16 @@ class RecordBasedFileManager {
    * @param out
    * @param src
    * @param projected_fields
-<<<<<<< HEAD
+
    * @param cmp
    * @param cond_field_idx
    * @param cond_value
-=======
->>>>>>> yundai/proj2
+
    * @return
    */
   static RC deserializeRecord(const std::vector<Attribute> &recordDescriptor,
                               void *out,
                               const char *src,
-<<<<<<< HEAD
                               const std::vector<bool> &projected_fields,
                               CompOp cmp,
                               int cond_field_idx,
@@ -430,10 +423,7 @@ class RecordBasedFileManager {
   static bool cmpAttr(CompOp cmp,
                       AttrType type,
                       const void *val1,
-                      const void *val2;
-=======
-                              const std::vector<bool> &projected_fields);
->>>>>>> yundai/proj2
+                      const void *val2);
 
 };
 
