@@ -64,27 +64,49 @@ class RelationManager {
 
   RC dropAttribute(const std::string &tableName, const std::string &attributeName);
 
+  std::vector<char> makeTableRecord(const std::string &table_name, bool is_system = false);
+
+  std::vector<char> makeColumnRecord(const std::string &table_name,
+                                     const int idx,
+                                     Attribute attr);
+
  protected:
   RelationManager();                                                  // Prevent construction
   ~RelationManager();                                                 // Prevent unwanted destruction
   RelationManager(const RelationManager &);                           // Prevent construction by copying
   RelationManager &operator=(const RelationManager &);                // Prevent assignment
+
  private:
   static const int SYSTEM_FLAG;
+  static const std::string TABLE_CATALOG_;
+  static const std::string COLUMN_CATALOG_;
+  static const std::unordered_set<std::string> system_tables_;
+  static FileHandle table_fh_;
+  static FileHandle column_fh_;
   RecordBasedFileManager *rbfm_;
-  std::string catalog_file_name_;
-  std::unordered_map<std::string, std::string> table_files_;
-  std::unordered_set<std::string> system_tables_;
+  std::unordered_map<std::string, int> table_to_id_;
+  std::unordered_map<std::string, std::vector<Attribute>> table_to_attrs_;
 
-  bool inline checkCatalog();
+  /**
+   * parse existed catalog files to memory
+   */
+  void parseCatalog();
+
+  bool inline ifDBExists();
+
+  bool inline ifTableExists(const std::string &tableName) {
+    return table_to_id_.find(tableName) != table_to_id_.end();
+  }
 
   RC createTableImpl(const std::string &tableName, const std::vector<Attribute> &attrs, bool is_system_table=false);
 };
 
-bool RelationManager::checkCatalog() {
-  if (catalog_file_name_.empty()) {
-    DB_ERROR << "catalog not created yet!";
-    return false;
+bool RelationManager::ifDBExists() {
+  for (auto &f : system_tables_) {
+    if (!PagedFileManager::ifFileExists(f)) {
+      DB_ERROR << "database not created yet!";
+      return false;
+    }
   }
   return true;
 }

@@ -45,7 +45,7 @@ RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
 //  for (auto page : pages_) {
 //    page->dump(fileHandle);
 //  }
-
+  this->pages_.clear();
   return pfm_->closeFile(fileHandle);
 }
 
