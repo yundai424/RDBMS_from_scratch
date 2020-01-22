@@ -134,6 +134,7 @@ class Page {
                 int cond_field_idx = -1,
                 void *cond_value = nullptr);
 
+
 //  std::string ToString() const;
 
   static void initPage(char *page_data);
@@ -186,13 +187,11 @@ void Page::maintainFreeSpace() {
 std::pair<PID, PageOffset> Page::decodeDirectory(unsigned directory) {
   // high 20 bit represent page num, low 12 bit represent offset in page
   unsigned first = (directory & 0xfffff000) >> 12; // first 20 bits
-  //TODO: consider the case of forwarding pointer
 
   return {(directory & 0xfffff000) >> 12, directory & 0xfff};
 }
 
 unsigned Page::encodeDirectory(std::pair<PID, PageOffset> page_offset) {
-  //TODO: consider the case of forwarding pointer
   static const unsigned MAX_PID = 0xfffff;
   if (page_offset.first > MAX_PID) { // exceed 16 bits
     throw std::runtime_error("Page id overflow");
@@ -354,6 +353,11 @@ class RecordBasedFileManager {
                     const RID &rid,
                     void *data,
                     const std::vector<bool> &projected_fields);
+<<<<<<< HEAD
+=======
+
+
+>>>>>>> yundai/proj2
 
   /**
    * load meta of next page into memory
@@ -406,14 +410,18 @@ class RecordBasedFileManager {
    * @param out
    * @param src
    * @param projected_fields
+<<<<<<< HEAD
    * @param cmp
    * @param cond_field_idx
    * @param cond_value
+=======
+>>>>>>> yundai/proj2
    * @return
    */
   static RC deserializeRecord(const std::vector<Attribute> &recordDescriptor,
                               void *out,
                               const char *src,
+<<<<<<< HEAD
                               const std::vector<bool> &projected_fields,
                               CompOp cmp,
                               int cond_field_idx,
@@ -423,6 +431,9 @@ class RecordBasedFileManager {
                       AttrType type,
                       const void *val1,
                       const void *val2;
+=======
+                              const std::vector<bool> &projected_fields);
+>>>>>>> yundai/proj2
 
 };
 

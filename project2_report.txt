@@ -1,0 +1,41 @@
+1. Basic information
+Team #:
+Github Repo Link:
+Student 1 UCI NetID:
+Student 1 Name:
+Student 2 UCI NetID (if applicable):
+Student 2 Name (if applicable):
+
+
+2. Meta-data
+- Show your meta-data design (Tables and Columns table) and information about each column.
+
+
+3. Internal Record Format
+- Show your record format design and describe how your design satisfies O(1) field access. If not, just mention that your team hasn't implemented this feature.
+
+- Describe how you store a VarChar field.
+
+
+4. Page Format
+- Show your page format design.
+
+
+5. File Format
+- Show your file format design
+
+
+6. Describe the following operation logic.
+- Update a record
+
+- Delete a record
+
+- Scan
+
+
+7. Implementation Detail
+- Other implementation details goes here.
+
+
+8. Other (optional)
+- Freely use this section to tell us about things that are related to the project 2, but not related to the other sections (optional)           
