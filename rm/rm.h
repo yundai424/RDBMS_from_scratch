@@ -78,37 +78,46 @@ class RelationManager {
 
  private:
   static const int SYSTEM_FLAG;
-  static const std::string TABLE_CATALOG_;
-  static const std::string COLUMN_CATALOG_;
-  static const std::unordered_set<std::string> system_tables_;
-  static FileHandle table_fh_;
-  static FileHandle column_fh_;
+  static const std::string TABLE_CATALOG_NAME_;
+  static const std::string COLUMN_CATALOG_NAME_;
+  static const std::vector<Attribute> TABLE_CATALOG_DESC_;
+  static const std::vector<Attribute> COLUMN_CATALOG_DESC_;
   RecordBasedFileManager *rbfm_;
-  std::unordered_map<std::string, int> table_to_id_;
-  std::unordered_map<std::string, std::vector<Attribute>> table_to_attrs_;
+  int max_tid_;
+
+  // TODO: I suspect whether we can store these in memory, or parseCatalog each time
+  std::unordered_map<std::string, std::vector<Attribute>> table_schema_;
+  std::unordered_map<std::string, std::string> table_files_;
+  std::unordered_map<std::string, int> table_ids_;
+  std::unordered_set<std::string> system_tables_;
 
   /**
-   * parse existed catalog files to memory
+   * TODO: parse existed catalog files to memory
    */
   void parseCatalog();
 
   bool inline ifDBExists();
 
-  bool inline ifTableExists(const std::string &tableName) {
-    return table_to_id_.find(tableName) != table_to_id_.end();
-  }
+  bool inline ifTableExists(const std::string &tableName);
 
-  RC createTableImpl(const std::string &tableName, const std::vector<Attribute> &attrs, bool is_system_table=false);
+  /*
+   * abstract as a function, in case they change the naming rules :(
+   */
+  std::string inline getTableFileName(const std::string &tableName, bool is_system_table);
+
+  RC createTableImpl(const std::string &tableName, const std::vector<Attribute> &attrs, bool is_system_table = false);
 };
 
 bool RelationManager::ifDBExists() {
-  for (auto &f : system_tables_) {
-    if (!PagedFileManager::ifFileExists(f)) {
-      DB_ERROR << "database not created yet!";
-      return false;
-    }
-  }
-  return true;
+  return table_files_.count(TABLE_CATALOG_NAME_) && table_files_.count(COLUMN_CATALOG_NAME_);
+}
+
+bool RelationManager::ifTableExists(const std::string &tableName) {
+  return table_files_.count(tableName);
+}
+
+std::string RelationManager::getTableFileName(const std::string &tableName, bool is_system_table) {
+  return is_system_table ? tableName + ".catalog" : tableName + ".db";
 }
 
 #endif
