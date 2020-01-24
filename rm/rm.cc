@@ -3,15 +3,15 @@
 const int RelationManager::SYSTEM_FLAG = 1;
 const std::string RelationManager::TABLE_CATALOG_NAME_ = "Tables";
 const std::string RelationManager::COLUMN_CATALOG_NAME_ = "Columns";
-const std::vector<Attribute> RelationManager::TABLE_CATALOG_DESC_ = {{"tableId", AttrType::TypeInt, 4},
-                                                                     {"tableName", AttrType::TypeVarChar, 50},
-                                                                     {"fileName", AttrType::TypeVarChar, 50},
-                                                                     {"isSystem", AttrType::TypeInt, 4}};
-const std::vector<Attribute> RelationManager::COLUMN_CATALOG_DESC_ = {{"tableId", AttrType::TypeInt, 4},
-                                                                      {"columnName", AttrType::TypeVarChar, 50},
-                                                                      {"columnType", AttrType::TypeInt, 4},
-                                                                      {"columnLength", AttrType::TypeInt, 4},
-                                                                      {"columnPosition", AttrType::TypeInt, 4}};
+const std::vector<Attribute> RelationManager::TABLE_CATALOG_DESC_ = {{"table-id", AttrType::TypeInt, 4},
+                                                                     {"table-name", AttrType::TypeVarChar, 50},
+                                                                     {"file-name", AttrType::TypeVarChar, 50},
+                                                                     {"is-system", AttrType::TypeInt, 4}};
+const std::vector<Attribute> RelationManager::COLUMN_CATALOG_DESC_ = {{"table-id", AttrType::TypeInt, 4},
+                                                                      {"column-name", AttrType::TypeVarChar, 50},
+                                                                      {"column-type", AttrType::TypeInt, 4},
+                                                                      {"column-length", AttrType::TypeInt, 4},
+                                                                      {"column-position", AttrType::TypeInt, 4}};
 
 RelationManager &RelationManager::instance() {
   static RelationManager _relation_manager = RelationManager();
@@ -173,7 +173,7 @@ RC RelationManager::scan(const std::string &tableName,
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
   rbfm_->openFile(table_file, rm_ScanIterator.file_handle_);
-  rm_ScanIterator.rbfm_scan_iterator_.init(rm_ScanIterator.file_handle_, rbfm_, recordDescriptor, conditionAttribute, compOp, value, attributeNames);
+//  rm_ScanIterator.rbfm_scan_iterator_.init(rm_ScanIterator.file_handle_, rbfm_, recordDescriptor, conditionAttribute, compOp, value, attributeNames);
   RC ret = rbfm_->scan(rm_ScanIterator.file_handle_, recordDescriptor, conditionAttribute, compOp, value, attributeNames, rm_ScanIterator.rbfm_scan_iterator_);
   // should not close file here: need to fetch records via fh later on...
 //  rbfm_->closeFile(fh);
@@ -277,8 +277,8 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
   memcpy(column_record.data() + offset, &col_name_len, sizeof(int));
   offset += sizeof(int);
   // col name
-  memcpy(column_record.data() + offset, attr.name.c_str(), table_name.size());
-  offset += table_name.size();
+  memcpy(column_record.data() + offset, attr.name.c_str(), attr.name.size());
+  offset += attr.name.size();
   // col type
   int col_type = attr.type;
   memcpy(column_record.data() + offset, &col_type, sizeof(int));
@@ -289,6 +289,63 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
   // col pos
   memcpy(column_record.data() + offset, &idx, sizeof(int));
   return column_record;
+}
+
+void RelationManager::parseCatalog() {
+  // parse Table.catalog
+  FileHandle fh_table;
+  RBFM_ScanIterator table_scan_iterator;
+  rbfm_->scan(fh_table,
+              TABLE_CATALOG_DESC_, "", NO_OP, nullptr,
+              {"table-id", "table-name", "file-name", "is-system"},
+              table_scan_iterator);
+  RID rid;
+  char buffer[PAGE_SIZE];
+  while (table_scan_iterator.getNextRecord(rid, buffer) != RBFM_EOF) {
+    int offset = 1;
+    int table_id = *(buffer + offset);
+    offset += sizeof(int);
+    int tab_name_len = *(buffer + offset);
+    offset += sizeof(int);
+    std::string tab_name(buffer + offset, tab_name_len);
+    offset += tab_name_len;
+    int file_name_len = *(buffer + offset);
+    offset += sizeof(int);
+    std::string file_name(buffer + offset, file_name_len);
+    offset += file_name_len;
+    table_ids_[tab_name] = table_id;
+    table_files_[tab_name] = file_name;
+    int isSys = *(buffer + offset);
+    if (isSys == SYSTEM_FLAG)
+      system_tables_.insert(tab_name);
+  }
+  table_scan_iterator.close();
+  fh_table.closeFile();
+
+  // parse Column.catalog
+  FileHandle fh_col;
+  RBFM_ScanIterator col_scan_iterator;
+  rbfm_->scan(fh_table,
+              COLUMN_CATALOG_DESC_, "", NO_OP, nullptr,
+              {"table-id", "column-name", "column-type", "column-length", "column-position"},
+              col_scan_iterator);
+  while (col_scan_iterator.getNextRecord(rid, buffer) != RBFM_EOF) {
+    Attribute col;
+    int offset = 1;
+    int table_id = *(buffer + offset);
+    offset += sizeof(int);
+    int attr_name_len = *(buffer + offset);
+    offset += sizeof(int);
+    col.name = std::string(buffer + offset, attr_name_len);
+    offset += attr_name_len;
+    col.type = static_cast<AttrType> (*(buffer + offset));
+    offset += sizeof(int);
+    col.length = *(buffer + offset);
+    offset += sizeof(int);
+    int attr_pos = *(buffer + offset);
+    offset += sizeof(int);
+    // TODO: store parsed info to table_schema_
+  }
 }
 
 RC RM_ScanIterator::close() {

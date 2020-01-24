@@ -93,6 +93,7 @@ RC FileHandle::closeFile() {
 
   // flush new counters to metadata
   updateCounterToFile();
+  pages_.clear();
   _file.close();
   return 0;
 }

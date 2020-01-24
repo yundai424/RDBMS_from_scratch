@@ -508,9 +508,6 @@ bool RecordBasedFileManager::cmpAttr(CompOp cmp,
       {CompOp::GE_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) >= 0; }},
   };
 
-  const int *val1_int, *val2_int;
-  const float *val1_float, *val2_float;
-  const char *val1_char, *val2_char;
   if (type == AttrType::TypeInt) {
 
     return int_op_map.at(cmp)(*static_cast<const int *>(val1), *static_cast<const int *>(val2));
