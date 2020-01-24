@@ -222,7 +222,6 @@ class RBFM_ScanIterator {
   static constexpr PID INVALID_PID = UINT32_MAX;
 
   RecordBasedFileManager *rbfm_;
-  std::vector<std::shared_ptr<Page>> * pages; // from RBFM
   FileHandle *file_handle_;
   std::shared_ptr<Page> page_;
   PID pid_;
@@ -337,7 +336,6 @@ class RecordBasedFileManager {
 
   PagedFileManager *pfm_;
 //  std::vector<std::shared_ptr<Page>> pages_;
-  std::unordered_map<std::string, std::vector<std::shared_ptr<Page>>> pages_;
 //  std::map<size_t, std::unordered_set<Page *>> free_slots_; // assume each page only have one free slot
 
 
@@ -359,33 +357,23 @@ class RecordBasedFileManager {
   /**
    * load meta of next page into memory
    * @param fileHandle
-   * @param pages
    */
-  void loadNextPage(FileHandle &fileHandle, std::vector<std::shared_ptr<Page>> &pages);
+  void loadNextPage(FileHandle &fileHandle);
 
   /**
    * append a new page and return the pid
    * @param file_handle
-   * @param pages
    */
-  void appendNewPage(FileHandle &file_handle,std::vector<std::shared_ptr<Page>> &pages);
+  void appendNewPage(FileHandle &file_handle);
 
   /**
    * find Available page to insert `size` data, will append new page if all pages are full
    * @param size
    * @param file_handle
-   * @param pages
    * @return
    */
-  Page *findAvailableSlot(size_t size, FileHandle &file_handle, std::vector<std::shared_ptr<Page>> &pages);
+  Page *findAvailableSlot(size_t size, FileHandle &file_handle);
 
-  bool inline ifFileHandleOpen(const FileHandle &file_handle) {
-    if (!pages_.count(file_handle.name)) {
-      DB_ERROR << "file handle `" << file_handle.name << "` not opened";
-      return false;
-    }
-    return true;
-  }
 
   static inline directory_t entryDirectoryOverheadLength(int fields_num) {
     return sizeof(directory_t) * (fields_num + 1);
@@ -397,12 +385,9 @@ class RecordBasedFileManager {
    * check Rid and load page, if check valid, Page pointer will be returned, otherwise nullptr
    * @param rid
    * @param file_handle
-   * @param pages
    * @return
    */
-  std::pair<bool, Page *> loadPageWithRid(const RID &rid,
-                                          FileHandle &file_handle,
-                                          const std::vector<std::shared_ptr<Page>> &pages);
+  std::pair<bool, Page *> loadPageWithRid(const RID &rid, FileHandle &file_handle);
 
  public:
 
@@ -434,7 +419,7 @@ class RecordBasedFileManager {
                               const std::vector<bool> &projected_fields,
                               CompOp cmp,
                               int cond_field_idx,
-                              void *cond_value);
+                              const void *cond_value);
 
   static bool cmpAttr(CompOp cmp,
                       AttrType type,

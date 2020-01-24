@@ -163,6 +163,8 @@ class PagedFileManager {
   static PagedFileManager *_pf_manager;
 };
 
+class Page;
+
 class FileHandle {
  public:
   // variables to keep the counter for each operation
@@ -170,6 +172,7 @@ class FileHandle {
   unsigned writePageCounter;
   unsigned appendPageCounter;
   std::string name;
+  std::vector<std::shared_ptr<Page>> pages_;
 
   FileHandle();                                                       // Default constructor
   ~FileHandle();                                                      // Destructor
