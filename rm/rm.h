@@ -22,6 +22,7 @@ class RM_ScanIterator {
   RC close();
 
  private:
+  FileHandle file_handle_;
   RBFM_ScanIterator rbfm_scan_iterator_;
 };
 

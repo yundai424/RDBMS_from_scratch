@@ -172,10 +172,9 @@ RC RelationManager::scan(const std::string &tableName,
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
-  FileHandle fh;
-  rbfm_->openFile(table_file, fh);
-  rm_ScanIterator.rbfm_scan_iterator_.init(fh, rbfm_, recordDescriptor, conditionAttribute, compOp, value, attributeNames);
-  RC ret = rbfm_->scan(fh, recordDescriptor, conditionAttribute, compOp, value, attributeNames, rm_ScanIterator.rbfm_scan_iterator_);
+  rbfm_->openFile(table_file, rm_ScanIterator.file_handle_);
+  rm_ScanIterator.rbfm_scan_iterator_.init(rm_ScanIterator.file_handle_, rbfm_, recordDescriptor, conditionAttribute, compOp, value, attributeNames);
+  RC ret = rbfm_->scan(rm_ScanIterator.file_handle_, recordDescriptor, conditionAttribute, compOp, value, attributeNames, rm_ScanIterator.rbfm_scan_iterator_);
   // should not close file here: need to fetch records via fh later on...
 //  rbfm_->closeFile(fh);
   return ret;
@@ -259,12 +258,13 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
   int null_indicator_length = int(ceil(double(4) / 8));
   unsigned column_record_length = null_indicator_length; // null indicator
   column_record_length += sizeof(int); // table id
-  column_record_length = column_record_length + sizeof(int) + attr.name.size(); // column name
+  column_record_length += sizeof(int) + attr.name.size(); // column name
   column_record_length += 3 * sizeof(int); // column type, length, position
 
 
   DB_DEBUG << "column record length of: " << table_name << "," << attr.name << " is " << column_record_length;
   std::vector<char> column_record(column_record_length, 0);
+
   memset(column_record.data(), 0, null_indicator_length);
   unsigned offset = null_indicator_length;
 
@@ -292,6 +292,7 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
 }
 
 RC RM_ScanIterator::close() {
+  file_handle_.closeFile();
   rbfm_scan_iterator_.close();
 }
 
