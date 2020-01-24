@@ -603,7 +603,7 @@ RC Page::readData(PageOffset record_offset,
                   const std::vector<bool> &projected_fields,
                   CompOp cmp,
                   int cond_field_idx,
-                  void *cond_value) {
+                  const void *cond_value) {
   return RecordBasedFileManager::deserializeRecord(recordDescriptor,
                                                    out,
                                                    data + record_offset,
@@ -753,7 +753,6 @@ RBFM_ScanIterator::RBFM_ScanIterator() : pid_(INVALID_PID) {}
 RC RBFM_ScanIterator::close() {
   if (page_) page_->freeMem();
   page_.reset();
-  file_handle_->closeFile();
   pid_ = INVALID_PID; // use pid_ == INVALID_PID to marked closed or EOF
   return 0;
 }
@@ -803,7 +802,7 @@ RC RBFM_ScanIterator::init(FileHandle &fileHandle,
       DB_ERROR << "condition attribute " << conditionAttribute << " not found in recordDescriptor";
       return -1;
     }
-    condition_attr_idx_ = it - record_descriptor_.begin();
+    cond_field_idx_ = it - record_descriptor_.begin();
   }
 
   return 0;
@@ -840,7 +839,7 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
       actual_page->load(*file_handle_);
       offset.second = actual_page->records_offset[offset.second].second;
     }
-    RC ret = actual_page->readData(offset.second, data, record_descriptor_, projected_fields_);
+    RC ret = actual_page->readData(offset.second, data, record_descriptor_, projected_fields_,comp_op_,cond_field_idx_,value_);
     if (actual_page != page_) {
       // redirected page
       actual_page->freeMem();

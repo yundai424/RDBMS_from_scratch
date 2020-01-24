@@ -132,7 +132,7 @@ class Page {
               const std::vector<bool> &projected_fields,
               CompOp cmp = CompOp::NO_OP,
               int cond_field_idx = -1,
-              void *cond_value = nullptr);
+              const void *cond_value = nullptr);
 
 
 //  std::string ToString() const;
@@ -230,7 +230,7 @@ class RBFM_ScanIterator {
   std::vector<Attribute> record_descriptor_;
   std::vector<bool> projected_fields_;
   std::unordered_map<RID, RID, RIDHash> redirect_map_; // redirected_rid to origin_rid
-  int condition_attr_idx_;
+  int cond_field_idx_;
   CompOp comp_op_;
   const void *value_;
 
