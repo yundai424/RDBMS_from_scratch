@@ -80,7 +80,6 @@ RC RecordBasedFileManager::printRecord(const std::vector<Attribute> &recordDescr
   int fields_num = recordDescriptor.size();
   int indicator_bytes_num = int(ceil(double(fields_num) / 8));
   std::vector<bool> null_indicators = parseNullIndicator((const unsigned char *) data, recordDescriptor.size());
-
   // the real data position
   const char *real_data = ((char *) data) + indicator_bytes_num;
 
@@ -754,6 +753,7 @@ RBFM_ScanIterator::RBFM_ScanIterator() : pid_(INVALID_PID) {}
 RC RBFM_ScanIterator::close() {
   if (page_) page_->freeMem();
   page_.reset();
+  file_handle_->closeFile();
   pid_ = INVALID_PID; // use pid_ == INVALID_PID to marked closed or EOF
   return 0;
 }
@@ -833,14 +833,6 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
     std::shared_ptr<Page> actual_page = page_;
     rid = {pid_, sid_};
     if (offset.first != page_->pid) {
-      // TODO: scan by physical page layout, but we need to know which page is a record redirected from
-      // maybe encode in highest bit in its PID
-//      if (offset.first != Page::REDIRECT_PID) {
-//        // redirected to another page
-//        redirect_map_[rid] = {offset.first, static_cast<unsigned short>(offset.second)};
-//      } else {
-//        // redirected from another page
-//      }
       if (offset.first == Page::REDIRECT_PID) {
         continue;
       }

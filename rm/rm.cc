@@ -3,15 +3,15 @@
 const int RelationManager::SYSTEM_FLAG = 1;
 const std::string RelationManager::TABLE_CATALOG_NAME_ = "Tables";
 const std::string RelationManager::COLUMN_CATALOG_NAME_ = "Columns";
-const std::vector<Attribute> RelationManager::TABLE_CATALOG_DESC_ = {{"table-id", AttrType::TypeInt, 4},
-                                                                     {"table-name", AttrType::TypeVarChar, 50},
-                                                                     {"file-name", AttrType::TypeVarChar, 50},
-                                                                     {"is-system", AttrType::TypeInt, 4}};
-const std::vector<Attribute> RelationManager::COLUMN_CATALOG_DESC_ = {{"table-id", AttrType::TypeInt, 4},
-                                                                      {"column-name", AttrType::TypeVarChar, 50},
-                                                                      {"column-type", AttrType::TypeInt, 4},
-                                                                      {"column-length", AttrType::TypeInt, 4},
-                                                                      {"column-position", AttrType::TypeInt, 4}};
+const std::vector<Attribute> RelationManager::TABLE_CATALOG_DESC_ = {{"tableId", AttrType::TypeInt, 4},
+                                                                     {"tableName", AttrType::TypeVarChar, 50},
+                                                                     {"fileName", AttrType::TypeVarChar, 50},
+                                                                     {"isSystem", AttrType::TypeInt, 4}};
+const std::vector<Attribute> RelationManager::COLUMN_CATALOG_DESC_ = {{"tableId", AttrType::TypeInt, 4},
+                                                                      {"columnName", AttrType::TypeVarChar, 50},
+                                                                      {"columnType", AttrType::TypeInt, 4},
+                                                                      {"columnLength", AttrType::TypeInt, 4},
+                                                                      {"columnPosition", AttrType::TypeInt, 4}};
 
 RelationManager &RelationManager::instance() {
   static RelationManager _relation_manager = RelationManager();
@@ -64,6 +64,30 @@ RC RelationManager::deleteTable(const std::string &tableName) {
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
 
   // TODO: use scan to find entry in catalog and delete
+  char buffer[PAGE_SIZE] = {0};
+  // select from TABLE_C_N where tableId == tableId
+  RM_ScanIterator rmsi;
+  int id = table_ids_.at(tableName);
+  scan(TABLE_CATALOG_NAME_, "tableId", EQ_OP, &id, {"table-id"}, rmsi);
+  RID tab_rid;
+  while (rmsi.getNextTuple(tab_rid, buffer) != RM_EOF) {
+    if (deleteTuple(TABLE_CATALOG_NAME_, tab_rid) != 0) {
+      rmsi.close();
+      return -1;
+    }
+  }
+  rmsi.close();
+
+  // select from TABLE_C_N where tableId == tableId
+  scan(COLUMN_CATALOG_NAME_, "tableId", EQ_OP, &id, {"table-id"}, rmsi);
+  RID col_rid;
+  while (rmsi.getNextTuple(col_rid, buffer) != RM_EOF) {
+    if (deleteTuple(COLUMN_CATALOG_NAME_, col_rid) != 0) {
+      rmsi.close();
+      return -1;
+    }
+  }
+  rmsi.close();
 
   if (!rbfm_->destroyFile(table_files_[tableName])) return -1;
   table_schema_.erase(tableName);
@@ -79,7 +103,6 @@ RC RelationManager::getAttributes(const std::string &tableName, std::vector<Attr
 
 RC RelationManager::insertTuple(const std::string &tableName, const void *data, RID &rid) {
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
-  if (system_tables_.count(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
   FileHandle fh;
@@ -91,7 +114,6 @@ RC RelationManager::insertTuple(const std::string &tableName, const void *data, 
 
 RC RelationManager::deleteTuple(const std::string &tableName, const RID &rid) {
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
-  if (system_tables_.count(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
   FileHandle fh;
@@ -103,7 +125,6 @@ RC RelationManager::deleteTuple(const std::string &tableName, const RID &rid) {
 
 RC RelationManager::updateTuple(const std::string &tableName, const void *data, const RID &rid) {
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
-  if (system_tables_.count(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
   FileHandle fh;
@@ -153,10 +174,11 @@ RC RelationManager::scan(const std::string &tableName,
   const auto &recordDescriptor = table_schema_.at(tableName);
   FileHandle fh;
   rbfm_->openFile(table_file, fh);
-  RC ret = rbfm_->scan(fh, recordDescriptor, conditionAttribute, compOp, value, attributeNames, rm_ScanIterator);
-  rbfm_->closeFile(fh);
+  rm_ScanIterator.rbfm_scan_iterator_.init(fh, rbfm_, recordDescriptor, conditionAttribute, compOp, value, attributeNames);
+  RC ret = rbfm_->scan(fh, recordDescriptor, conditionAttribute, compOp, value, attributeNames, rm_ScanIterator.rbfm_scan_iterator_);
+  // should not close file here: need to fetch records via fh later on...
+//  rbfm_->closeFile(fh);
   return ret;
-  return -1;
 }
 
 // Extra credit work
@@ -182,13 +204,15 @@ RC RelationManager::createTableImpl(const std::string &tableName,
     table_ids_[tableName] = ++max_tid_;
   }
 
-  auto table_data = makeTableRecord(tableName, is_system_table).data();
+  auto table_data = makeTableRecord(tableName, is_system_table);
+  rbfm_->printRecord(TABLE_CATALOG_DESC_, table_data.data());
   RID tbl_id;
-  if (insertTuple(TABLE_CATALOG_NAME_, table_data, tbl_id) != 0) return -1;
+  if (insertTuple(TABLE_CATALOG_NAME_, table_data.data(), tbl_id) != 0) return -1;
   for (int i = 0; i < attrs.size(); ++i) {
-    auto column_data = makeColumnRecord(tableName, i, attrs[i]).data();
+    auto column_data = makeColumnRecord(tableName, i, attrs[i]);
+    rbfm_->printRecord(COLUMN_CATALOG_DESC_, column_data.data());
     RID col_id;
-    if (insertTuple(COLUMN_CATALOG_NAME_, column_data, col_id) != 0) return -1;
+    if (insertTuple(COLUMN_CATALOG_NAME_, column_data.data(), col_id) != 0) return -1;
   }
   return 0;
 }
@@ -208,19 +232,24 @@ std::vector<char> RelationManager::makeTableRecord(const std::string &table_name
 
   DB_DEBUG << "table record length of: " << table_name << " is " << table_record_length;
   std::vector<char> table_record(table_record_length, 0);
+  memset(table_record.data(), 0, null_indicator_length);
   unsigned offset = null_indicator_length;
 
-  memcpy(table_record.data() + offset, (char *) (table_ids_[table_name]), sizeof(int)); // table id
+  int table_id = table_ids_[table_name];
+  memcpy(table_record.data() + offset, &table_id, sizeof(int)); // table id
   offset += sizeof(int);
-  memcpy(table_record.data() + offset, (char *) table_name.size(), sizeof(int)); // table name length
+  int table_name_len = table_name.size();
+  memcpy(table_record.data() + offset, &table_name_len, sizeof(int)); // table name length
   offset += sizeof(int);
   memcpy(table_record.data() + offset, table_name.c_str(), table_name.size()); // table name
   offset += table_name.size();
-  memcpy(table_record.data() + offset, (char *) file_name.size(), sizeof(int)); // file name length
+  int file_name_len = file_name.size();
+  memcpy(table_record.data() + offset, &file_name_len, sizeof(int)); // file name length
   offset += sizeof(int);
   memcpy(table_record.data() + offset, file_name.c_str(), file_name.size()); // file name
   offset += file_name.size();
-  memcpy(table_record.data() + offset, (char *) ((int) is_system), sizeof(int)); // is system
+  int issys = (int) is_system;
+  memcpy(table_record.data() + offset, &issys, sizeof(int)); // is system
   return table_record;
 }
 
@@ -236,18 +265,36 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
 
   DB_DEBUG << "column record length of: " << table_name << "," << attr.name << " is " << column_record_length;
   std::vector<char> column_record(column_record_length, 0);
+  memset(column_record.data(), 0, null_indicator_length);
   unsigned offset = null_indicator_length;
 
-  memcpy(column_record.data() + offset, (char *) (table_to_id_[table_name]), sizeof(int)); // table id
+  // table id
+  int table_id = table_ids_[table_name];
+  memcpy(column_record.data() + offset, &table_id, sizeof(int));
   offset += sizeof(int);
-  memcpy(column_record.data() + offset, (char *) attr.name.size(), sizeof(int)); // column name length
+  // col name length
+  int col_name_len = attr.name.size();
+  memcpy(column_record.data() + offset, &col_name_len, sizeof(int));
   offset += sizeof(int);
-  memcpy(column_record.data() + offset, attr.name.c_str(), attr.name.size()); // column name
-  offset += attr.name.size();
-  memcpy(column_record.data() + offset, (char *) attr.type, sizeof(attr.type)); // column type
-  offset += sizeof(attr.type);
-  memcpy(column_record.data() + offset, (char *) attr.length, sizeof(attr.length)); // column length
-  offset += sizeof(attr.length);
-  memcpy(column_record.data() + offset, (char *) idx, sizeof(idx)); // column pos
+  // col name
+  memcpy(column_record.data() + offset, attr.name.c_str(), table_name.size());
+  offset += table_name.size();
+  // col type
+  int col_type = attr.type;
+  memcpy(column_record.data() + offset, &col_type, sizeof(int));
+  offset += sizeof(int);
+  // col len
+  memcpy(column_record.data() + offset, &(attr.length), sizeof(int));
+  offset += sizeof(int);
+  // col pos
+  memcpy(column_record.data() + offset, &idx, sizeof(int));
   return column_record;
+}
+
+RC RM_ScanIterator::close() {
+  rbfm_scan_iterator_.close();
+}
+
+RC RM_ScanIterator::getNextTuple(RID & rid, void * data) {
+  return rbfm_scan_iterator_.getNextRecord(rid, data);
 }
