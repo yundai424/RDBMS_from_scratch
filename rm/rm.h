@@ -75,6 +75,8 @@ class RelationManager {
                                      const int idx,
                                      Attribute attr);
 
+  void printTables() const;
+
  protected:
   RelationManager();                                                  // Prevent construction
   ~RelationManager();                                                 // Prevent unwanted destruction
@@ -96,9 +98,8 @@ class RelationManager {
   std::unordered_map<std::string, int> table_ids_;
   std::unordered_set<std::string> system_tables_;
 
-  /**
-   * TODO: parse existed catalog files to memory
-   */
+  void loadDbIfExist();
+
   void parseCatalog();
 
   bool inline ifDBExists();

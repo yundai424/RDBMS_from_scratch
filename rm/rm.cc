@@ -18,7 +18,9 @@ RelationManager &RelationManager::instance() {
   return _relation_manager;
 }
 
-RelationManager::RelationManager() : rbfm_(&RecordBasedFileManager::instance()), max_tid_(0) {}
+RelationManager::RelationManager() : rbfm_(&RecordBasedFileManager::instance()), max_tid_(-1) {
+  loadDbIfExist();
+}
 
 RelationManager::~RelationManager() = default;
 
@@ -63,7 +65,6 @@ RC RelationManager::createTable(const std::string &tableName, const std::vector<
 RC RelationManager::deleteTable(const std::string &tableName) {
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
 
-  // TODO: use scan to find entry in catalog and delete
   char buffer[PAGE_SIZE] = {0};
   // select from TABLE_C_N where tableId == tableId
   RM_ScanIterator rmsi;
@@ -92,6 +93,7 @@ RC RelationManager::deleteTable(const std::string &tableName) {
   if (!rbfm_->destroyFile(table_files_[tableName])) return -1;
   table_schema_.erase(tableName);
   table_files_.erase(tableName);
+  table_ids_.erase(tableName);
   return 0;
 }
 
@@ -318,20 +320,30 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
   return column_record;
 }
 
+void RelationManager::loadDbIfExist() {
+  if (PagedFileManager::ifFileExists(getTableFileName(TABLE_CATALOG_NAME_, true))
+      && PagedFileManager::ifFileExists(getTableFileName(COLUMN_CATALOG_NAME_, true))) {
+    DB_INFO << "loading Existing DB...";
+    parseCatalog();
+  }
+}
+
 void RelationManager::parseCatalog() {
   // parse Table.catalog
+  std::unordered_map<int, std::string> id_tables_map;
   FileHandle fh_table;
+  rbfm_->openFile(getTableFileName(TABLE_CATALOG_NAME_, true), fh_table);
   RBFM_ScanIterator table_scan_iterator;
-  std::vector<std::string> projected_fields;
-  for (auto &desc:TABLE_CATALOG_DESC_) projected_fields.push_back(desc.name);
+  std::vector<std::string> table_projected_fields;
+  for (auto &desc:TABLE_CATALOG_DESC_) table_projected_fields.push_back(desc.name);
   rbfm_->scan(fh_table,
               TABLE_CATALOG_DESC_, "", NO_OP, nullptr,
-              projected_fields,
+              table_projected_fields,
               table_scan_iterator);
   RID rid;
   char buffer[PAGE_SIZE];
   while (table_scan_iterator.getNextRecord(rid, buffer) != RBFM_EOF) {
-    int offset = 1;
+    int offset = 1; // null indicator
     int table_id = *(buffer + offset);
     offset += sizeof(int);
     int tab_name_len = *(buffer + offset);
@@ -344,6 +356,12 @@ void RelationManager::parseCatalog() {
     offset += file_name_len;
     table_ids_[tab_name] = table_id;
     table_files_[tab_name] = file_name;
+    if (id_tables_map.count(table_id)) {
+      DB_ERROR << "conflict table id " << table_id;
+      throw std::runtime_error("Parse schema error");
+    }
+    id_tables_map[table_id] = tab_name;
+    max_tid_ = std::max(max_tid_, table_id);
     int isSys = *(buffer + offset);
     if (isSys == SYSTEM_FLAG)
       system_tables_.insert(tab_name);
@@ -352,11 +370,15 @@ void RelationManager::parseCatalog() {
   fh_table.closeFile();
 
   // parse Column.catalog
+  std::unordered_map<int, std::vector<std::pair<int, Attribute>>> cols_by_tid; // map<tid, vector<<col_pos, attr>>>
   FileHandle fh_col;
+  rbfm_->openFile(getTableFileName(COLUMN_CATALOG_NAME_, true), fh_col);
   RBFM_ScanIterator col_scan_iterator;
+  std::vector<std::string> col_projected_field;
+  for (auto &desc: COLUMN_CATALOG_DESC_) col_projected_field.push_back(desc.name);
   rbfm_->scan(fh_table,
               COLUMN_CATALOG_DESC_, "", NO_OP, nullptr,
-              {"table-id", "column-name", "column-type", "column-length", "column-position"},
+              col_projected_field,
               col_scan_iterator);
   while (col_scan_iterator.getNextRecord(rid, buffer) != RBFM_EOF) {
     Attribute col;
@@ -373,7 +395,54 @@ void RelationManager::parseCatalog() {
     offset += sizeof(int);
     int attr_pos = *(buffer + offset);
     offset += sizeof(int);
-    // TODO: store parsed info to table_schema_
+    cols_by_tid[table_id].emplace_back(attr_pos, col);
+  }
+
+  // store parsed info to table_schema_
+  std::unordered_set<int> visited;
+  for (auto &table:cols_by_tid) {
+    auto tid = table.first;
+    visited.insert(tid);
+    auto &cols = table.second;
+    if (!id_tables_map.count(tid)) {
+      DB_ERROR << "tid " << tid << " not exist!";
+      throw std::runtime_error("Parse schema error");
+    }
+    std::string table_name = id_tables_map.at(table.first);
+    std::sort(cols.begin(), cols.end()); // pair sorted by first by default
+    if (cols.back().first != cols.size() - 1) {
+      DB_ERROR << "max col pos " << cols.back().first << " while cols.size() == " << cols.size();
+      throw std::runtime_error("Parse schema error");
+    }
+    if (table_schema_.count(table_name)) {
+      DB_ERROR << "table name `" << table_name << "` conflict!";
+      throw std::runtime_error("Parse schema error");
+    }
+    for (auto &col : cols)
+      table_schema_[table_name].push_back(col.second);
+  }
+  for (auto &kv : id_tables_map)
+    if (!visited.count(kv.first)) {
+      DB_ERROR << "table id " << kv.first << " not found in cols";
+      throw std::runtime_error("Parse schema error");
+    }
+}
+
+void RelationManager::printTables() const {
+  static const std::unordered_map<AttrType, std::string, EnumHash> TypeNameMap = {
+      {AttrType::TypeInt, "TypeInt"},
+      {AttrType::TypeReal, "TypeReal"},
+      {AttrType::TypeVarChar, "TypeVarChar"}
+  };
+  std::vector<std::pair<int, std::string>> tables;
+  for (auto &kv :table_ids_) tables.emplace_back(kv.second, kv.first);
+  std::sort(tables.begin(), tables.end());
+  // print sorted by tid
+  for (auto &t : tables) {
+    DB_INFO << "Table: " << t.second;
+    for (auto &attr : table_schema_.at(t.second)) {
+      DB_INFO << "\t" << attr.name << "\t" << TypeNameMap.at(attr.type) << "\t" << attr.length;
+    }
   }
 }
 
