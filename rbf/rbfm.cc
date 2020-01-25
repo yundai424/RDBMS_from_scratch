@@ -728,9 +728,10 @@ void Page::checkDataend() {
  *
  *************************************/
 
-RBFM_ScanIterator::RBFM_ScanIterator() : pid_(INVALID_PID) {}
+RBFM_ScanIterator::RBFM_ScanIterator() : pid_(INVALID_PID), init_(false) {}
 
 RC RBFM_ScanIterator::close() {
+  init_ = false;
   if (page_) page_->freeMem();
   page_.reset();
   pid_ = INVALID_PID; // use pid_ == INVALID_PID to marked closed or EOF
@@ -744,7 +745,7 @@ RC RBFM_ScanIterator::init(FileHandle &fileHandle,
                            CompOp compOp,
                            const void *value,
                            const std::vector<std::string> &attributeNames) {
-
+  init_ = true;
   rbfm_ = rbfm;
   file_handle_ = &fileHandle;
   pid_ = 0;
@@ -787,6 +788,10 @@ RC RBFM_ScanIterator::init(FileHandle &fileHandle,
 }
 
 RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
+  if (!init_) {
+    DB_ERROR << "iterator not init!";
+    return RBFM_EOF;
+  }
   while (pid_ != INVALID_PID) {
     if ((pid_ == 0 && sid_ == 0) || sid_ == page_->records_offset.size()) {
       // load next page
@@ -832,7 +837,6 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
     else return 0;
 
   }
-  DB_ERROR << "iterator not init or reach EOF";
   return RBFM_EOF;
 
 }

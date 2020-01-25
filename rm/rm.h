@@ -69,13 +69,7 @@ class RelationManager {
 
   RC dropAttribute(const std::string &tableName, const std::string &attributeName);
 
-  std::vector<char> makeTableRecord(const std::string &table_name, bool is_system = false);
-
-  std::vector<char> makeColumnRecord(const std::string &table_name,
-                                     const int idx,
-                                     Attribute attr);
-
-  void printTables() const;
+  void printTables();
 
  protected:
   RelationManager();                                                  // Prevent construction
@@ -91,6 +85,7 @@ class RelationManager {
   static const std::vector<Attribute> COLUMN_CATALOG_DESC_;
   RecordBasedFileManager *rbfm_;
   int max_tid_;
+  bool init_;
 
   // TODO: I suspect whether we can store these in memory, or parseCatalog each time
   std::unordered_map<std::string, std::vector<Attribute>> table_schema_;
@@ -98,9 +93,9 @@ class RelationManager {
   std::unordered_map<std::string, int> table_ids_;
   std::unordered_set<std::string> system_tables_;
 
-  void loadDbIfExist();
-
   void parseCatalog();
+
+  void inline loadDbIfExist();
 
   bool inline ifDBExists();
 
@@ -113,11 +108,17 @@ class RelationManager {
 
   RC createTableImpl(const std::string &tableName, const std::vector<Attribute> &attrs, bool is_system_table = false);
 
-  RC insertTupleImpl(const std::string &tableName, const void *data, RID &rid, bool is_system=false);
+  RC insertTupleImpl(const std::string &tableName, const void *data, RID &rid, bool is_system = false);
 
-  RC deleteTupleImpl(const std::string &tableName, const RID &rid, bool is_system=false);
+  RC deleteTupleImpl(const std::string &tableName, const RID &rid, bool is_system = false);
 
-  RC updateTupleImpl(const std::string &tableName, const void *data, const RID &rid, bool is_system=false);
+  RC updateTupleImpl(const std::string &tableName, const void *data, const RID &rid, bool is_system = false);
+
+  std::vector<char> makeTableRecord(const std::string &table_name, bool is_system = false);
+
+  std::vector<char> makeColumnRecord(const std::string &table_name,
+                                     const int idx,
+                                     Attribute attr);
 };
 
 bool RelationManager::ifDBExists() {
@@ -129,7 +130,23 @@ bool RelationManager::ifTableExists(const std::string &tableName) {
 }
 
 std::string RelationManager::getTableFileName(const std::string &tableName, bool is_system_table) {
-  return is_system_table ? tableName + ".catalog" : tableName + ".db";
+  return is_system_table ? tableName + ".catalog" : tableName;
+}
+
+void RelationManager::loadDbIfExist() {
+  /*
+   * this part is really tricky, rm in test_util is initialized as static global,
+   * but due to the uncertainty of order in static initialization, many other static variable might not be initialized yet
+   * so we can not call this function in ctor, instead, we use lazy initialization,
+   * all public API should call this funciton first
+   */
+  if (!init_ &&
+      PagedFileManager::ifFileExists(getTableFileName(TABLE_CATALOG_NAME_, true)) &&
+      PagedFileManager::ifFileExists(getTableFileName(COLUMN_CATALOG_NAME_, true))) {
+    DB_INFO << "loading existing DB..";
+    parseCatalog();
+    init_ = true;
+  }
 }
 
 #endif

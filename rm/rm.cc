@@ -18,8 +18,8 @@ RelationManager &RelationManager::instance() {
   return _relation_manager;
 }
 
-RelationManager::RelationManager() : rbfm_(&RecordBasedFileManager::instance()), max_tid_(-1) {
-  loadDbIfExist();
+RelationManager::RelationManager() : rbfm_(&RecordBasedFileManager::instance()), max_tid_(-1), init_(false) {
+  // should do nothing here
 }
 
 RelationManager::~RelationManager() = default;
@@ -29,6 +29,7 @@ RelationManager::RelationManager(const RelationManager &) = default;
 RelationManager &RelationManager::operator=(const RelationManager &) = default;
 
 RC RelationManager::createCatalog() {
+  loadDbIfExist();
   if (ifDBExists()) return -1;
 
   rbfm_->createFile(getTableFileName(TABLE_CATALOG_NAME_, true));
@@ -44,10 +45,12 @@ RC RelationManager::createCatalog() {
   createTableImpl(TABLE_CATALOG_NAME_, TABLE_CATALOG_DESC_, true);
   createTableImpl(COLUMN_CATALOG_NAME_, COLUMN_CATALOG_DESC_, true);
 
+  init_ = true;
   return 0;
 }
 
 RC RelationManager::deleteCatalog() {
+  loadDbIfExist();
   if (!ifDBExists()) return -1;
   for (auto &f : system_tables_) {
     if (rbfm_->destroyFile(f) != 0)
@@ -57,12 +60,13 @@ RC RelationManager::deleteCatalog() {
 }
 
 RC RelationManager::createTable(const std::string &tableName, const std::vector<Attribute> &attrs) {
+  loadDbIfExist();
   if (!ifDBExists() || ifTableExists(tableName)) return -1;
-
   return createTableImpl(tableName, attrs);
 }
 
 RC RelationManager::deleteTable(const std::string &tableName) {
+  loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
 
   char buffer[PAGE_SIZE] = {0};
@@ -98,12 +102,14 @@ RC RelationManager::deleteTable(const std::string &tableName) {
 }
 
 RC RelationManager::getAttributes(const std::string &tableName, std::vector<Attribute> &attrs) {
+  loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   attrs = table_schema_.at(tableName);
   return 0;
 }
 
 RC RelationManager::insertTuple(const std::string &tableName, const void *data, RID &rid) {
+  loadDbIfExist();
   return insertTupleImpl(tableName, data, rid);
 }
 
@@ -123,6 +129,7 @@ RC RelationManager::insertTupleImpl(const std::string &tableName, const void *da
 }
 
 RC RelationManager::deleteTuple(const std::string &tableName, const RID &rid) {
+  loadDbIfExist();
   return deleteTupleImpl(tableName, rid);
 }
 
@@ -142,6 +149,7 @@ RC RelationManager::deleteTupleImpl(const std::string &tableName, const RID &rid
 }
 
 RC RelationManager::updateTuple(const std::string &tableName, const void *data, const RID &rid) {
+  loadDbIfExist();
   return updateTupleImpl(tableName, data, rid);
 }
 
@@ -161,6 +169,7 @@ RC RelationManager::updateTupleImpl(const std::string &tableName, const void *da
 }
 
 RC RelationManager::readTuple(const std::string &tableName, const RID &rid, void *data) {
+  loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
@@ -179,6 +188,7 @@ RC RelationManager::printTuple(const std::vector<Attribute> &attrs, const void *
 
 RC RelationManager::readAttribute(const std::string &tableName, const RID &rid, const std::string &attributeName,
                                   void *data) {
+  loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
@@ -195,6 +205,7 @@ RC RelationManager::scan(const std::string &tableName,
                          const void *value,
                          const std::vector<std::string> &attributeNames,
                          RM_ScanIterator &rm_ScanIterator) {
+  loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
@@ -211,12 +222,14 @@ RC RelationManager::scan(const std::string &tableName,
 
 // Extra credit work
 RC RelationManager::dropAttribute(const std::string &tableName, const std::string &attributeName) {
+  loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   return -1;
 }
 
 // Extra credit work
 RC RelationManager::addAttribute(const std::string &tableName, const Attribute &attr) {
+  loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   return -1;
 }
@@ -233,14 +246,14 @@ RC RelationManager::createTableImpl(const std::string &tableName,
   }
 
   auto table_data = makeTableRecord(tableName, is_system_table);
-  rbfm_->printRecord(TABLE_CATALOG_DESC_, table_data.data());
+//  rbfm_->printRecord(TABLE_CATALOG_DESC_, table_data.data());
   RID tbl_id;
-  if (insertTupleImpl(TABLE_CATALOG_NAME_, table_data.data(), tbl_id, is_system_table) != 0) return -1;
+  if (insertTupleImpl(TABLE_CATALOG_NAME_, table_data.data(), tbl_id, true) != 0) return -1;
   for (int i = 0; i < attrs.size(); ++i) {
     auto column_data = makeColumnRecord(tableName, i, attrs[i]);
-    rbfm_->printRecord(COLUMN_CATALOG_DESC_, column_data.data());
+//    rbfm_->printRecord(COLUMN_CATALOG_DESC_, column_data.data());
     RID col_id;
-    if (insertTupleImpl(COLUMN_CATALOG_NAME_, column_data.data(), col_id, is_system_table) != 0) return -1;
+    if (insertTupleImpl(COLUMN_CATALOG_NAME_, column_data.data(), col_id, true) != 0) return -1;
   }
   return 0;
 }
@@ -258,7 +271,7 @@ std::vector<char> RelationManager::makeTableRecord(const std::string &table_name
   table_record_length = table_record_length + sizeof(int) + file_name.size(); // file name
   table_record_length += sizeof(int); // is-system
 
-  DB_DEBUG << "table record length of: " << table_name << " is " << table_record_length;
+//  DB_DEBUG << "table record length of: " << table_name << " is " << table_record_length;
   std::vector<char> table_record(table_record_length, 0);
   memset(table_record.data(), 0, null_indicator_length);
   unsigned offset = null_indicator_length;
@@ -291,7 +304,7 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
   column_record_length += 3 * sizeof(int); // column type, length, position
 
 
-  DB_DEBUG << "column record length of: " << table_name << "," << attr.name << " is " << column_record_length;
+//  DB_DEBUG << "column record length of: " << table_name << "," << attr.name << " is " << column_record_length;
   std::vector<char> column_record(column_record_length, 0);
 
   memset(column_record.data(), 0, null_indicator_length);
@@ -320,13 +333,6 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
   return column_record;
 }
 
-void RelationManager::loadDbIfExist() {
-  if (PagedFileManager::ifFileExists(getTableFileName(TABLE_CATALOG_NAME_, true))
-      && PagedFileManager::ifFileExists(getTableFileName(COLUMN_CATALOG_NAME_, true))) {
-    DB_INFO << "loading Existing DB...";
-    parseCatalog();
-  }
-}
 
 void RelationManager::parseCatalog() {
   // parse Table.catalog
@@ -409,7 +415,11 @@ void RelationManager::parseCatalog() {
       throw std::runtime_error("Parse schema error");
     }
     std::string table_name = id_tables_map.at(table.first);
-    std::sort(cols.begin(), cols.end()); // pair sorted by first by default
+    std::sort(cols.begin(),
+              cols.end(),
+              [](const std::pair<int, Attribute> &p1, const std::pair<int, Attribute> &p2) {
+                return p1.first < p2.first;
+              });
     if (cols.back().first != cols.size() - 1) {
       DB_ERROR << "max col pos " << cols.back().first << " while cols.size() == " << cols.size();
       throw std::runtime_error("Parse schema error");
@@ -428,7 +438,8 @@ void RelationManager::parseCatalog() {
     }
 }
 
-void RelationManager::printTables() const {
+void RelationManager::printTables(){
+  loadDbIfExist();
   static const std::unordered_map<AttrType, std::string, EnumHash> TypeNameMap = {
       {AttrType::TypeInt, "TypeInt"},
       {AttrType::TypeReal, "TypeReal"},
@@ -447,8 +458,9 @@ void RelationManager::printTables() const {
 }
 
 RC RM_ScanIterator::close() {
-  file_handle_.closeFile();
-  rbfm_scan_iterator_.close();
+  int ret = file_handle_.closeFile();
+  if (!ret) return ret;
+  return rbfm_scan_iterator_.close();
 }
 
 RC RM_ScanIterator::getNextTuple(RID &rid, void *data) {

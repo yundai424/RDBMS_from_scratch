@@ -232,6 +232,7 @@ class RBFM_ScanIterator {
   int cond_field_idx_;
   CompOp comp_op_;
   const void *value_;
+  bool init_;
 
  public:
   RBFM_ScanIterator();

@@ -28,13 +28,21 @@ enum LogLevel {
   QUIET = 4
 
 };
-static std::map<LogLevel, std::string> kPrefixMap = {
-    {DEBUGGING, "\e[1;96m[TRACE]"},
-    {INFO, "\e[1;32m[INFO]"},
-    {WARNING, "\e[1;33m[WARN]"},
-    {ERROR, "\e[1;31m[ERROR]"},
-};
-static std::string kPostfix = "\e[0m";
+
+static const std::map<LogLevel, std::string> &kPrefixMap() {
+  static const std::map<LogLevel, std::string> tmp{
+      {DEBUGGING, "\e[1;96m[DEBUG]"},
+      {INFO, "\e[1;32m[INFO]"},
+      {WARNING, "\e[1;33m[WARN]"},
+      {ERROR, "\e[1;31m[ERROR]"},
+  };
+  return tmp;
+}
+
+static std::string kPostfix() {
+  static const std::string tmp = "\e[0m";
+  return tmp;
+}
 
 class Logger {
  private:
@@ -69,9 +77,9 @@ class Logger {
     if (level_ < global_level) return *this;
     if (!opened_) {
       file_path_ = get_file_name(file_path_);
-      std::cout << std::setw(14) << std::left << std::dec << kPrefixMap[level_]
-           << " In '" << func_path_ << "' " << file_path_ << ":" << line_num_
-           << " " << kPostfix;
+      std::cout << std::setw(14) << std::left << std::dec << kPrefixMap().at(level_)
+                << " In '" << func_path_ << "' " << file_path_ << ":" << line_num_
+                << " " << kPostfix();
       opened_ = true;
     }
     std::cout << v;
