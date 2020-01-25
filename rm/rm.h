@@ -111,6 +111,12 @@ class RelationManager {
   std::string inline getTableFileName(const std::string &tableName, bool is_system_table);
 
   RC createTableImpl(const std::string &tableName, const std::vector<Attribute> &attrs, bool is_system_table = false);
+
+  RC insertTupleImpl(const std::string &tableName, const void *data, RID &rid, bool is_system=false);
+
+  RC deleteTupleImpl(const std::string &tableName, const RID &rid, bool is_system=false);
+
+  RC updateTupleImpl(const std::string &tableName, const void *data, const RID &rid, bool is_system=false);
 };
 
 bool RelationManager::ifDBExists() {

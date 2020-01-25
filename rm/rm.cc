@@ -102,6 +102,14 @@ RC RelationManager::getAttributes(const std::string &tableName, std::vector<Attr
 }
 
 RC RelationManager::insertTuple(const std::string &tableName, const void *data, RID &rid) {
+  return insertTupleImpl(tableName, data, rid);
+}
+
+RC RelationManager::insertTupleImpl(const std::string &tableName, const void *data, RID &rid, bool is_system) {
+  if (!is_system && system_tables_.count(tableName)) {
+    DB_ERROR << "Not allowed to insert Tuple in system table " << tableName;
+    return -1;
+  }
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
@@ -113,6 +121,14 @@ RC RelationManager::insertTuple(const std::string &tableName, const void *data, 
 }
 
 RC RelationManager::deleteTuple(const std::string &tableName, const RID &rid) {
+  return deleteTupleImpl(tableName, rid);
+}
+
+RC RelationManager::deleteTupleImpl(const std::string &tableName, const RID &rid, bool is_system) {
+  if (!is_system && system_tables_.count(tableName)) {
+    DB_ERROR << "Not allowed to delete Tuple in system table " << tableName;
+    return -1;
+  }
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
@@ -124,6 +140,14 @@ RC RelationManager::deleteTuple(const std::string &tableName, const RID &rid) {
 }
 
 RC RelationManager::updateTuple(const std::string &tableName, const void *data, const RID &rid) {
+  return updateTupleImpl(tableName, data, rid);
+}
+
+RC RelationManager::updateTupleImpl(const std::string &tableName, const void *data, const RID &rid, bool is_system) {
+  if (!is_system && system_tables_.count(tableName)) {
+    DB_ERROR << "Not allowed to update Tuple in system table " << tableName;
+    return -1;
+  }
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
@@ -173,10 +197,13 @@ RC RelationManager::scan(const std::string &tableName,
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName);
   rbfm_->openFile(table_file, rm_ScanIterator.file_handle_);
-//  rm_ScanIterator.rbfm_scan_iterator_.init(rm_ScanIterator.file_handle_, rbfm_, recordDescriptor, conditionAttribute, compOp, value, attributeNames);
-  RC ret = rbfm_->scan(rm_ScanIterator.file_handle_, recordDescriptor, conditionAttribute, compOp, value, attributeNames, rm_ScanIterator.rbfm_scan_iterator_);
-  // should not close file here: need to fetch records via fh later on...
-//  rbfm_->closeFile(fh);
+  RC ret = rbfm_->scan(rm_ScanIterator.file_handle_,
+                       recordDescriptor,
+                       conditionAttribute,
+                       compOp,
+                       value,
+                       attributeNames,
+                       rm_ScanIterator.rbfm_scan_iterator_);
   return ret;
 }
 
@@ -206,12 +233,12 @@ RC RelationManager::createTableImpl(const std::string &tableName,
   auto table_data = makeTableRecord(tableName, is_system_table);
   rbfm_->printRecord(TABLE_CATALOG_DESC_, table_data.data());
   RID tbl_id;
-  if (insertTuple(TABLE_CATALOG_NAME_, table_data.data(), tbl_id) != 0) return -1;
+  if (insertTupleImpl(TABLE_CATALOG_NAME_, table_data.data(), tbl_id, is_system_table) != 0) return -1;
   for (int i = 0; i < attrs.size(); ++i) {
     auto column_data = makeColumnRecord(tableName, i, attrs[i]);
     rbfm_->printRecord(COLUMN_CATALOG_DESC_, column_data.data());
     RID col_id;
-    if (insertTuple(COLUMN_CATALOG_NAME_, column_data.data(), col_id) != 0) return -1;
+    if (insertTupleImpl(COLUMN_CATALOG_NAME_, column_data.data(), col_id, is_system_table) != 0) return -1;
   }
   return 0;
 }
@@ -295,9 +322,11 @@ void RelationManager::parseCatalog() {
   // parse Table.catalog
   FileHandle fh_table;
   RBFM_ScanIterator table_scan_iterator;
+  std::vector<std::string> projected_fields;
+  for (auto &desc:TABLE_CATALOG_DESC_) projected_fields.push_back(desc.name);
   rbfm_->scan(fh_table,
               TABLE_CATALOG_DESC_, "", NO_OP, nullptr,
-              {"table-id", "table-name", "file-name", "is-system"},
+              projected_fields,
               table_scan_iterator);
   RID rid;
   char buffer[PAGE_SIZE];
@@ -353,6 +382,6 @@ RC RM_ScanIterator::close() {
   rbfm_scan_iterator_.close();
 }
 
-RC RM_ScanIterator::getNextTuple(RID & rid, void * data) {
+RC RM_ScanIterator::getNextTuple(RID &rid, void *data) {
   return rbfm_scan_iterator_.getNextRecord(rid, data);
 }
