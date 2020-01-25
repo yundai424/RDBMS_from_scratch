@@ -67,7 +67,7 @@ RC FileHandle::openFile(const std::string &fileName) {
   }
 
   if (_file.is_open()) {
-//    DB_WARNING << "file " << name << "already open!";
+    DB_WARNING << "file " << name << "already open!";
     return -1;
   }
 

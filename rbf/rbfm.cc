@@ -613,6 +613,10 @@ void Page::parseMeta() {
   records_offset.clear();
   invalid_slots_.clear();
 
+  /*
+   * layout of tail of page: [...directories...., num_slots, real_free_space]
+   */
+
   unsigned *pt = (unsigned *) (data + PAGE_SIZE) - 1;
   real_free_space_ = *pt--;
   unsigned num_slots = *pt--;
@@ -688,8 +692,8 @@ RC Page::shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool f
              0,
              shift_size); // in case there could be some non-zeros after shifting backward
     real_free_space_ += shift_size;
-    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back "
-             << shift_size << " bytes";
+//    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back "
+//             << shift_size << " bytes";
   }
   maintainFreeSpace();
   return 0;
@@ -767,7 +771,7 @@ RC RBFM_ScanIterator::init(FileHandle &fileHandle,
       }
     }
     if (!found) {
-      DB_ERROR << "attribute " << attr << " not found in recordDescriptor";
+      DB_ERROR << "attribute `" << attr << "` not found in recordDescriptor";
       return -1;
     }
   }
@@ -793,23 +797,29 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
     return RBFM_EOF;
   }
   while (pid_ != INVALID_PID) {
-    if ((pid_ == 0 && sid_ == 0) || sid_ == page_->records_offset.size()) {
-      // load next page
-      if (pid_ > 0) {
-        page_->freeMem();
-        page_.reset();
-        ++pid_;
-      }
-      // EOF
-      if (pid_ == file_handle_->pages_.size()) {
-        pid_ = INVALID_PID;
-        break;
-      }
+    if (pid_ == 0 && sid_ == 0 && !page_) {
       page_ = std::make_shared<Page>(pid_);
       page_->load(*file_handle_);
-      sid_ = 0;
-    } else ++sid_;
+    } else {
+      if (sid_ == page_->records_offset.size() - 1) {
+        // load next page
+        do {
+          page_->freeMem();
+          page_.reset();
+          ++pid_;
+          // EOF
+          if (pid_ == file_handle_->pages_.size()) {
+            pid_ = INVALID_PID;
+            return RBFM_EOF;
+          }
+          page_ = std::make_shared<Page>(pid_);
+          page_->load(*file_handle_);
+          sid_ = 0;
+        } while (!page_->records_offset.empty());
+      } else ++sid_;
+    }
     // read next record
+//    DB_DEBUG << "Iterator: reading <" << pid_ << "," << sid_ << ">";
     auto offset = page_->records_offset[sid_];
 
     std::shared_ptr<Page> actual_page = page_;

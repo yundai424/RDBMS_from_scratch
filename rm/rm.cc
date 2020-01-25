@@ -53,9 +53,13 @@ RC RelationManager::deleteCatalog() {
   loadDbIfExist();
   if (!ifDBExists()) return -1;
   for (auto &f : system_tables_) {
-    if (rbfm_->destroyFile(f) != 0)
+    if (rbfm_->destroyFile(table_files_.at(f)) != 0)
       return -1;
   }
+  table_files_.clear();
+  table_schema_.clear();
+  table_ids_.clear();
+  system_tables_.clear();
   return 0;
 }
 
@@ -73,10 +77,10 @@ RC RelationManager::deleteTable(const std::string &tableName) {
   // select from TABLE_C_N where tableId == tableId
   RM_ScanIterator rmsi;
   int id = table_ids_.at(tableName);
-  scan(TABLE_CATALOG_NAME_, "tableId", EQ_OP, &id, {"table-id"}, rmsi);
+  scan(TABLE_CATALOG_NAME_, "table-id", EQ_OP, &id, {"table-id"}, rmsi);
   RID tab_rid;
   while (rmsi.getNextTuple(tab_rid, buffer) != RM_EOF) {
-    if (deleteTuple(TABLE_CATALOG_NAME_, tab_rid) != 0) {
+    if (deleteTupleImpl(TABLE_CATALOG_NAME_, tab_rid, true) != 0) {
       rmsi.close();
       return -1;
     }
@@ -84,10 +88,10 @@ RC RelationManager::deleteTable(const std::string &tableName) {
   rmsi.close();
 
   // select from TABLE_C_N where tableId == tableId
-  scan(COLUMN_CATALOG_NAME_, "tableId", EQ_OP, &id, {"table-id"}, rmsi);
+  scan(COLUMN_CATALOG_NAME_, "table-id", EQ_OP, &id, {"table-id"}, rmsi);
   RID col_rid;
   while (rmsi.getNextTuple(col_rid, buffer) != RM_EOF) {
-    if (deleteTuple(COLUMN_CATALOG_NAME_, col_rid) != 0) {
+    if (deleteTupleImpl(COLUMN_CATALOG_NAME_, col_rid, true) != 0) {
       rmsi.close();
       return -1;
     }
@@ -135,7 +139,7 @@ RC RelationManager::deleteTuple(const std::string &tableName, const RID &rid) {
 
 RC RelationManager::deleteTupleImpl(const std::string &tableName, const RID &rid, bool is_system) {
   if (!is_system && system_tables_.count(tableName)) {
-    DB_ERROR << "Not allowed to delete Tuple in system table " << tableName;
+    DB_ERROR << "Not allowed to delete tuple in system table `" << tableName << "`";
     return -1;
   }
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
@@ -333,7 +337,6 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
   return column_record;
 }
 
-
 void RelationManager::parseCatalog() {
   // parse Table.catalog
   std::unordered_map<int, std::string> id_tables_map;
@@ -382,7 +385,7 @@ void RelationManager::parseCatalog() {
   RBFM_ScanIterator col_scan_iterator;
   std::vector<std::string> col_projected_field;
   for (auto &desc: COLUMN_CATALOG_DESC_) col_projected_field.push_back(desc.name);
-  rbfm_->scan(fh_table,
+  rbfm_->scan(fh_col,
               COLUMN_CATALOG_DESC_, "", NO_OP, nullptr,
               col_projected_field,
               col_scan_iterator);
@@ -403,6 +406,8 @@ void RelationManager::parseCatalog() {
     offset += sizeof(int);
     cols_by_tid[table_id].emplace_back(attr_pos, col);
   }
+  col_scan_iterator.close();
+  fh_col.closeFile();
 
   // store parsed info to table_schema_
   std::unordered_set<int> visited;
@@ -438,7 +443,7 @@ void RelationManager::parseCatalog() {
     }
 }
 
-void RelationManager::printTables(){
+void RelationManager::printTables() {
   loadDbIfExist();
   static const std::unordered_map<AttrType, std::string, EnumHash> TypeNameMap = {
       {AttrType::TypeInt, "TypeInt"},
@@ -452,7 +457,7 @@ void RelationManager::printTables(){
   for (auto &t : tables) {
     DB_INFO << "Table: " << t.second;
     for (auto &attr : table_schema_.at(t.second)) {
-      DB_INFO << "\t" << attr.name << "\t" << TypeNameMap.at(attr.type) << "\t" << attr.length;
+      DB_INFO << "    " << attr.name << "\t" << TypeNameMap.at(attr.type) << "\t" << attr.length;
     }
   }
 }

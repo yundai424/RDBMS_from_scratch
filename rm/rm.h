@@ -143,7 +143,7 @@ void RelationManager::loadDbIfExist() {
   if (!init_ &&
       PagedFileManager::ifFileExists(getTableFileName(TABLE_CATALOG_NAME_, true)) &&
       PagedFileManager::ifFileExists(getTableFileName(COLUMN_CATALOG_NAME_, true))) {
-    DB_INFO << "loading existing DB..";
+//    DB_INFO << "loading existing DB..";
     parseCatalog();
     init_ = true;
   }
