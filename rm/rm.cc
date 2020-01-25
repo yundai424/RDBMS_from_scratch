@@ -60,6 +60,7 @@ RC RelationManager::deleteCatalog() {
   table_schema_.clear();
   table_ids_.clear();
   system_tables_.clear();
+  max_tid_ = -1;
   return 0;
 }
 
@@ -70,35 +71,46 @@ RC RelationManager::createTable(const std::string &tableName, const std::vector<
 }
 
 RC RelationManager::deleteTable(const std::string &tableName) {
+  DB_DEBUG << "deleting table " << tableName;
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
 
   char buffer[PAGE_SIZE] = {0};
   // select from TABLE_C_N where tableId == tableId
   RM_ScanIterator rmsi;
-  int id = table_ids_.at(tableName);
-  scan(TABLE_CATALOG_NAME_, "table-id", EQ_OP, &id, {"table-id"}, rmsi);
+  int tid = table_ids_.at(tableName);
+  scan(TABLE_CATALOG_NAME_, "table-id", EQ_OP, &tid, {"table-id"}, rmsi);
   RID tab_rid;
-  while (rmsi.getNextTuple(tab_rid, buffer) != RM_EOF) {
-    if (deleteTupleImpl(TABLE_CATALOG_NAME_, tab_rid, true) != 0) {
-      rmsi.close();
-      return -1;
-    }
+  if (rmsi.getNextTuple(tab_rid, buffer) == RM_EOF) {
+    DB_ERROR << "Can not find table named `" << tableName << "`";
+    return -1;
   }
   rmsi.close();
+
+  if (deleteTupleImpl(TABLE_CATALOG_NAME_, tab_rid, true) != 0) {
+    return -1;
+  }
+
+  DB_DEBUG << "Delete table `" << tableName << "` with tid " << tid << " rid <" << tab_rid.pageNum << ","
+           << tab_rid.slotNum << "> done";
 
   // select from TABLE_C_N where tableId == tableId
-  scan(COLUMN_CATALOG_NAME_, "table-id", EQ_OP, &id, {"table-id"}, rmsi);
+  RM_ScanIterator rmsi2;
+  std::vector<RID> cols_to_delete;
+  scan(COLUMN_CATALOG_NAME_, "table-id", EQ_OP, &tid, {"table-id"}, rmsi2);
   RID col_rid;
-  while (rmsi.getNextTuple(col_rid, buffer) != RM_EOF) {
-    if (deleteTupleImpl(COLUMN_CATALOG_NAME_, col_rid, true) != 0) {
-      rmsi.close();
+  while (rmsi2.getNextTuple(col_rid, buffer) != RM_EOF) {
+    cols_to_delete.push_back(col_rid);
+  }
+  rmsi2.close();
+  for (auto &col_to_delete: cols_to_delete) {
+    if (deleteTupleImpl(COLUMN_CATALOG_NAME_, col_to_delete, true) != 0) {
       return -1;
     }
+    DB_DEBUG << "Delete column " << " with rid <" << col_to_delete.pageNum << "," << col_to_delete.slotNum << "> done";
   }
-  rmsi.close();
 
-  if (!rbfm_->destroyFile(table_files_[tableName])) return -1;
+  if (rbfm_->destroyFile(table_files_[tableName])) return -1;
   table_schema_.erase(tableName);
   table_files_.erase(tableName);
   table_ids_.erase(tableName);
@@ -247,6 +259,7 @@ RC RelationManager::createTableImpl(const std::string &tableName,
     table_files_[tableName] = getTableFileName(tableName, is_system_table);
     rbfm_->createFile(table_files_[tableName]);
     table_ids_[tableName] = ++max_tid_;
+    DB_DEBUG << "Create table `" << tableName << "` with tid " << max_tid_;
   }
 
   auto table_data = makeTableRecord(tableName, is_system_table);

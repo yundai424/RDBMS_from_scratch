@@ -825,13 +825,17 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
     std::shared_ptr<Page> actual_page = page_;
     rid = {pid_, sid_};
     if (offset.first != page_->pid) {
+      // redirected from another page, skip
       if (offset.first == Page::REDIRECT_PID) {
         continue;
       }
+      // redirected to another page
       actual_page = std::make_shared<Page>(offset.first);
       actual_page->load(*file_handle_);
       offset.second = actual_page->records_offset[offset.second].second;
     }
+    // deleted
+    if (offset.second == Page::INVALID_OFFSET) continue;
     RC ret = actual_page->readData(offset.second,
                                    data,
                                    record_descriptor_,

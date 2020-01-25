@@ -26,6 +26,7 @@ struct RIDHash {
   std::size_t operator()(const RID &rid) const { return ((size_t) rid.pageNum << 32) ^ ((size_t) rid.slotNum); }
 };
 
+
 // Attribute
 typedef enum {
   TypeInt = 0, TypeReal, TypeVarChar
