@@ -45,6 +45,11 @@ RC TEST_RM_10(const std::string &tableName, std::vector<RID> &rids, std::vector<
         assert(rc == success && "RelationManager::readTuple() should not fail.");
 
         if (memcmp(returnedData, tuple, sizes[i]) != 0) {
+          std::cout << "expected data: ";
+          rm.printTuple(attrs,tuple);
+          std::cout << "returned data: ";
+            rm.printTuple(attrs,returnedData);
+
             std::cout << "***** [FAIL] Test Case 10 Failed *****" << std::endl << std::endl;
             free(tuple);
             free(returnedData);

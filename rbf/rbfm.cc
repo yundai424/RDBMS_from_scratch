@@ -262,7 +262,6 @@ RC RecordBasedFileManager::readRecordImpl(FileHandle &fileHandle,
                                           const std::vector<bool> &projected_fields) {
   auto ret = loadPageWithRid(rid, fileHandle);
   if (!ret.first) {
-    DB_WARNING << "readRecord failed, rid not exist";
     return -1;
   }
 
@@ -403,8 +402,8 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
         unsigned char mask = 1 << (7 - (j % 8));
         *pt = *pt | mask;
       }
-      ++j;
       if (j % 8 == 7) ++pt;
+      ++j;
     }
   }
 
@@ -424,7 +423,7 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
     }
   }
 
-  memcpy(out, indicator_bytes, indicator_bytes_num);
+  memcpy(out_pt, indicator_bytes, indicator_bytes_num);
   out_pt += indicator_bytes_num;
 
   // 3. write data
@@ -439,9 +438,11 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
     prev_offset = fields_offset[i];
     // here we don't need to handle varchar as special case,
     // since we already store that int for varchar len
-    if (projected_fields[i]) memcpy(out_pt, src, field_size);
+    if (projected_fields[i]) {
+      memcpy(out_pt, src, field_size);
+      out_pt += field_size;
+    }
     src += field_size;
-    out_pt += field_size;
   }
 
   return 0;
@@ -471,8 +472,8 @@ std::pair<bool, Page *> RecordBasedFileManager::loadPageWithRid(const RID &rid, 
   if (rid.slotNum > origin_page->records_offset.size()
       || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET
       || origin_page->records_offset[rid.slotNum].first == Page::REDIRECT_PID) {
-
-    DB_WARNING << "RID invalid, slot num " << rid.slotNum << " no exist";
+    DB_WARNING << "RID invalid, slot num " << rid.slotNum << " in page " << rid.pageNum
+               << " not exist, might be deleted or redirected or out of bound";
     origin_page->freeMem();
     return {false, nullptr};
   }

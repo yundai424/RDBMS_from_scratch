@@ -27,6 +27,7 @@ RC TEST_RM_2(const std::string &tableName, const int nameLength, const std::stri
     rm.printTuple(attrs, tuple);
     std::cout << std::endl;
     rc = rm.insertTuple(tableName, tuple, rid);
+//    DB_WARNING << rid.pageNum << ", " << rid.slotNum;
     assert(rc == success && "RelationManager::insertTuple() should not fail.");
 
     // Delete the tuple

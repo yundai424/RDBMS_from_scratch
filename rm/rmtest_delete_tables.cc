@@ -1,8 +1,6 @@
 #include "rm_test_util.h"
 
 int main() {
-  rm.printTables();
-
     // By executing this script, the following tables including the system tables will be removed.
     std::cout << std::endl << "***** RM TEST - Deleting the Catalog and User tables *****" << std::endl;
 

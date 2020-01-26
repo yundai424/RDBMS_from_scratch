@@ -3,6 +3,10 @@ project(cs222p_winter20)
 
 set(CMAKE_CXX_STANDARD 11)
 
+set(CMAKE_CXX_FLAGS_DEBUG "-O0")
+
+set(CMAKE_C_FLAGS_DEBUG "-O0")
+
 add_custom_target(clean-all
         COMMAND rm Index* Indices* left* right* large* group* *out Tables Columns tbl_* *_file *idx)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -O1 -g  -fno-omit-frame-pointer")

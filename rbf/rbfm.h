@@ -17,15 +17,17 @@ typedef short directory_t; // directories before real data, to indicate offset f
 static directory_t MAX_FIELD_NUM = INT16_MAX;
 
 // Record ID
-typedef struct {
+struct RID {
   unsigned pageNum;    // page number
   unsigned short slotNum;    // slot number in the page
-} RID;
+  std::string inline toString() const {
+    return "<" + std::to_string(pageNum) + "," + std::to_string(slotNum) + ">";
+  }
+};
 
 struct RIDHash {
   std::size_t operator()(const RID &rid) const { return ((size_t) rid.pageNum << 32) ^ ((size_t) rid.slotNum); }
 };
-
 
 // Attribute
 typedef enum {
@@ -375,7 +377,6 @@ class RecordBasedFileManager {
    * @return
    */
   Page *findAvailableSlot(size_t size, FileHandle &file_handle);
-
 
   static inline directory_t entryDirectoryOverheadLength(int fields_num) {
     return sizeof(directory_t) * (fields_num + 1);
