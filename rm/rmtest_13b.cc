@@ -70,7 +70,6 @@ RC TEST_RM_13b(const std::string &tableName) {
     attributes.push_back(attr);
     rc = rm.scan(tableName, attr, GT_OP, &ageVal, attributes, rmsi);
     assert(rc == success && "RelationManager::scan() should not fail.");
-
     while (rmsi.getNextTuple(rid, returnedData) != RM_EOF) {
         // Check the first bit of the returned data since we only return one attribute in this test case
         // However, the age with NULL should not be returned since the condition NULL > 25 can't hold.

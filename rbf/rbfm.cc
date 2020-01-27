@@ -411,6 +411,7 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
 
   // 2. compare if condition is given
   if (cmp != CompOp::NO_OP) {
+    if (fields_offset[cond_field_idx] == -1) return COND_NOT_SATISFIED; // compare NULL always false
     size_t cond_field_start = entryDirectoryOverheadLength(field_num);
     for (int i = cond_field_idx - 1; i >= 0; --i) {
       if (fields_offset[i] != -1) {

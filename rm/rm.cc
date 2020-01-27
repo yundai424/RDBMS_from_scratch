@@ -67,13 +67,15 @@ RC RelationManager::deleteCatalog() {
 RC RelationManager::createTable(const std::string &tableName, const std::vector<Attribute> &attrs) {
   loadDbIfExist();
   if (!ifDBExists() || ifTableExists(tableName)) return -1;
+  if (system_tables_.count(tableName)) return -1;
   return createTableImpl(tableName, attrs);
 }
 
 RC RelationManager::deleteTable(const std::string &tableName) {
-  DB_DEBUG << "deleting table " << tableName;
+  DB_DEBUG << "deleting table `" << tableName << "`";
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
+  if (system_tables_.count(tableName)) return -1;
 
   char buffer[PAGE_SIZE] = {0};
   // select from TABLE_C_N where tableId == tableId
