@@ -675,26 +675,33 @@ RC Page::shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool f
     if (forward) offset.second += shift_size;
     else offset.second -= shift_size;
   }
+  bool need_shift = true;
   if (chunk_start == PAGE_SIZE) {
     // no following records
-    return 0;
+    need_shift = false;
+    DB_DEBUG << "no following records, no need to shift data chunk";
   }
   size_t chunk_size = data_end - chunk_start;
   if (forward) {
-    memmove(data + chunk_start + shift_size, data + chunk_start, chunk_size);
-    memset(data + chunk_start, 0, shift_size);
     real_free_space_ -= shift_size;
-    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
-             << ") forward " << shift_size << " bytes";
+    if (need_shift) {
+      memmove(data + chunk_start + shift_size, data + chunk_start, chunk_size);
+      memset(data + chunk_start, 0, shift_size);
+      DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
+               << ") forward " << shift_size << " bytes";
+    }
   } else {
-    memmove(data + chunk_start - shift_size, data + chunk_start, chunk_size);
-    if (shift_size > chunk_size)
-      memset(data + chunk_start - shift_size + chunk_size,
-             0,
-             shift_size); // in case there could be some non-zeros after shifting backward
     real_free_space_ += shift_size;
-//    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size << ") back "
-//             << shift_size << " bytes";
+    if (need_shift) {
+      memmove(data + chunk_start - shift_size, data + chunk_start, chunk_size);
+      if (shift_size > chunk_size)
+        memset(data + chunk_start - shift_size + chunk_size,
+               0,
+               shift_size); // in case there could be some non-zeros after shifting backward
+
+      DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
+               << ") back " << shift_size << " bytes";
+    }
   }
   maintainFreeSpace();
   return 0;
