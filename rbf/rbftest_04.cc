@@ -38,6 +38,7 @@ int RBFTest_4(PagedFileManager &pfm) {
     for (unsigned i = 0; i < PAGE_SIZE; i++) {
         *((char *) data + i) = i % 96 + 30;
     }
+    DB_INFO << print_bytes(data, 200);
     rc = fileHandle.appendPage(data);
     assert(rc == success && "Appending a page should not fail.");
 

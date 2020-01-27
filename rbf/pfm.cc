@@ -1,4 +1,5 @@
 #include "pfm.h"
+#include "rbfm.h"
 
 /**
  * ======= Logger =======
@@ -52,10 +53,8 @@ RC PagedFileManager::closeFile(FileHandle &fileHandle) {
  * ======= FileHandle ==========
  */
 
-FileHandle::FileHandle() {
-  readPageCounter = 0;
-  writePageCounter = 0;
-  appendPageCounter = 0;
+FileHandle::FileHandle() : readPageCounter(0), writePageCounter(0), appendPageCounter(0), meta_modified_(false) {
+
 }
 
 FileHandle::~FileHandle() = default;
@@ -76,12 +75,27 @@ RC FileHandle::openFile(const std::string &fileName) {
 //    DB_WARNING << "failed to open file " << fileName;
     return -1;
   }
+  meta_modified_ = false;
   name = fileName;
-  // update counter using metadata
+  // load counter from metadata
   _file.seekg(0);
   _file.read((char *) &readPageCounter, sizeof(unsigned));
   _file.read((char *) &writePageCounter, sizeof(unsigned));
   _file.read((char *) &appendPageCounter, sizeof(unsigned));
+
+  // load free space for each page
+  // meta pages store free space are always appended at the end
+  int num_pages = getNumberOfPages();
+  _file.seekg(getPos(num_pages));
+  for (int i = 0; i < num_pages; ++i) {
+    // construct a Page object, read page to buffer, parse meta in corresponding data to initialize in-memory variables,
+    std::shared_ptr<Page> cur_page = std::make_shared<Page>(i);
+    _file.read((char *) (&cur_page->real_free_space_), sizeof(unsigned));
+    _file.read((char *) (&cur_page->free_space), sizeof(unsigned));
+
+    pages_.push_back(cur_page);
+  }
+
   return 0;
 }
 
@@ -92,19 +106,23 @@ RC FileHandle::closeFile() {
   }
 
   // flush new counters to metadata
-  updateCounterToFile();
-  pages_.clear();
-  _file.close();
-  return 0;
-}
-
-RC FileHandle::updateCounterToFile() {
-  if (!_file.is_open())
-    return -1;
   _file.seekp(0);
   _file.write((char *) &readPageCounter, sizeof(unsigned));
   _file.write((char *) &writePageCounter, sizeof(unsigned));
   _file.write((char *) &appendPageCounter, sizeof(unsigned));
+
+  // flush pages free space to metadata at tail
+  if (meta_modified_) {
+    int page_num = getNumberOfPages();
+    _file.seekp(getPos(page_num));
+    for (int i = 0; i < page_num; ++i) {
+      _file.write((char *) (&pages_[i]->real_free_space_), sizeof(unsigned));
+      _file.write((char *) (&pages_[i]->free_space), sizeof(unsigned));
+    }
+  }
+
+  pages_.clear();
+  _file.close();
   return 0;
 }
 
@@ -140,6 +158,7 @@ RC FileHandle::readPage(PageNum pageNum, void *data) {
 RC FileHandle::writePage(PageNum pageNum, const void *data) {
   if (pageNum >= getNumberOfPages() || !_file.is_open())
     return -1;
+  meta_modified_ = true;
   _file.seekp(getPos(pageNum));
   _file.write((char *) data, PAGE_SIZE);
   writePageCounter++;
@@ -151,9 +170,15 @@ RC FileHandle::appendPage(const void *data) {
 //    DB_WARNING << "File is not opened!";
     return -1;
   }
-  _file.seekp(getPos(appendPageCounter));
+  meta_modified_ = true;
+  _file.seekp(getPos(appendPageCounter)); // this will overwrite the tailing meta pages
   _file.write((char *) data, PAGE_SIZE);
   appendPageCounter++;
+
+  std::shared_ptr<Page> cur_page = std::make_shared<Page>(pages_.size());
+  cur_page->real_free_space_ = PAGE_SIZE - 2 * sizeof(unsigned);
+  cur_page->free_space = cur_page->real_free_space_ - sizeof(unsigned);
+  pages_.push_back(cur_page);
   return 0;
 }
 

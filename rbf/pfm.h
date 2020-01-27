@@ -181,6 +181,7 @@ class FileHandle {
   unsigned appendPageCounter;
   std::string name;
   std::vector<std::shared_ptr<Page>> pages_;
+  bool meta_modified_;
 
   FileHandle();                                                       // Default constructor
   ~FileHandle();                                                      // Destructor
@@ -198,7 +199,6 @@ class FileHandle {
   RC createFile(const std::string &fileName);
   RC openFile(const std::string &fileName);
   RC closeFile();
-  RC updateCounterToFile();
 
  private:
   static inline size_t getPos(PageNum page_num) {

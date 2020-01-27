@@ -72,9 +72,10 @@ struct EnumHash {
  */
 class Page {
   friend class RecordBasedFileManager;
+  friend class FileHandle;
   size_t data_end;
   char *data;
-  size_t real_free_space_;
+  unsigned real_free_space_;
   std::unordered_set<SID> invalid_slots_;
 
  public:
@@ -89,7 +90,7 @@ class Page {
    * free_space = real_free_space_                (there're deleted directory we can reuse,)
    * free_space = real_free_space_ - sizeof(int)  (all offset directories are full)
    */
-  size_t free_space;
+  unsigned free_space;
   std::vector<std::pair<PID, PageOffset >> records_offset; // offset (4095 means invalid)
 
   explicit Page(PID page_id);

@@ -21,7 +21,7 @@ test_list = ['./rmtest_create_tables',
              './rmtest_14',
              './rmtest_15']
 subprocess.check_output('make clean', shell=True)
-subprocess.check_output('make', shell=True)
+subprocess.check_output('make -j', shell=True)
 
 for task in test_list:
     subprocess.run(task).check_returncode()

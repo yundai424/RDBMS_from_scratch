@@ -28,15 +28,7 @@ RC RecordBasedFileManager::destroyFile(const std::string &fileName) {
 }
 
 RC RecordBasedFileManager::openFile(const std::string &fileName, FileHandle &fileHandle) {
-  RC ret = pfm_->openFile(fileName, fileHandle);
-  if (!ret) {
-    // init the RBFM
-    PID page_num = fileHandle.getNumberOfPages();
-    for (PID i = 0; i < page_num; ++i) {
-      loadNextPage(fileHandle);
-    }
-  }
-  return ret;
+  return pfm_->openFile(fileName, fileHandle);
 }
 
 RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
@@ -306,7 +298,6 @@ void RecordBasedFileManager::appendNewPage(FileHandle &file_handle) {
   char new_page[PAGE_SIZE];
   Page::initPage(new_page);
   file_handle.appendPage(new_page);
-  loadNextPage(file_handle);
 }
 
 std::vector<bool> RecordBasedFileManager::parseNullIndicator(const unsigned char *data, unsigned fields_num) {
@@ -620,6 +611,7 @@ void Page::parseMeta() {
    */
 
   unsigned *pt = (unsigned *) (data + PAGE_SIZE) - 1;
+  if (real_free_space_ != *(pt)) DB_ERROR << "FUCK";
   real_free_space_ = *pt--;
   unsigned num_slots = *pt--;
 
