@@ -668,7 +668,7 @@ RC Page::shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool f
   // get the START of the chunk of records to be moved
   size_t chunk_start = PAGE_SIZE;
   for (auto &offset: records_offset) {
-    if (offset.first != pid) continue;           // forwarding to another slot: no need to shift
+    if (offset.first != pid && offset.first != REDIRECT_PID) continue;  // redirected to another slot: no need to shift
     if (offset.second <= record_begin_offset || offset.second == INVALID_OFFSET)
       continue;  // locates before it or deleted
     chunk_start = std::min(chunk_start, size_t(offset.second));
