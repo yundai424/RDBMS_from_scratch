@@ -611,7 +611,9 @@ void Page::parseMeta() {
    */
 
   unsigned *pt = (unsigned *) (data + PAGE_SIZE) - 1;
-  if (real_free_space_ != *(pt)) DB_ERROR << "FUCK";
+  if (real_free_space_ != *(pt)) {
+    DB_ERROR << "FUCK " << real_free_space_ << " " << *pt;
+  }
   real_free_space_ = *pt--;
   unsigned num_slots = *pt--;
 
@@ -799,7 +801,7 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
   }
   while (pid_ != INVALID_PID) {
     if (pid_ == 0 && sid_ == 0 && !page_) {
-      page_ = std::make_shared<Page>(pid_);
+      page_ = file_handle_->pages_[pid_];
       page_->load(*file_handle_);
     } else {
       if (sid_ == page_->records_offset.size() - 1) {
@@ -813,10 +815,10 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
             pid_ = INVALID_PID;
             return RBFM_EOF;
           }
-          page_ = std::make_shared<Page>(pid_);
+          page_ = file_handle_->pages_[pid_];
           page_->load(*file_handle_);
           sid_ = 0;
-        } while (!page_->records_offset.empty());
+        } while (page_->records_offset.empty());
       } else ++sid_;
     }
     // read next record

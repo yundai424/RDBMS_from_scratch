@@ -28,6 +28,7 @@ RC TEST_RM_8(const std::string &tableName, std::vector<RID> &rids, std::vector<i
 
         rc = rm.insertTuple(tableName, tuple, rid);
         assert(rc == success && "RelationManager::insertTuple() should not fail.");
+        DB_INFO << "insert tuple " << i  << " with rid " << rid.toString();
 
         rids.push_back(rid);
         sizes.push_back(size);
