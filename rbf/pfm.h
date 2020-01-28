@@ -11,6 +11,9 @@
 #include <vector>
 #include <ostream>
 #include <stdexcept>
+#include <memory>
+#include <string.h>
+#include <algorithm>
 
 /******************************************
  *

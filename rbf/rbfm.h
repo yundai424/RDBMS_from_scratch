@@ -3,10 +3,8 @@
 
 #include "pfm.h"
 
-#include <memory>
 #include <unordered_set>
 #include <functional>
-#include <string.h>
 #include <unordered_map>
 
 typedef unsigned short SID; // slod it
