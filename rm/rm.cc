@@ -74,8 +74,7 @@ RC RelationManager::createTable(const std::string &tableName, const std::vector<
 RC RelationManager::deleteTable(const std::string &tableName) {
   DB_DEBUG << "deleting table `" << tableName << "`";
   loadDbIfExist();
-  if (!ifDBExists() || !ifTableExists(tableName)) return -1;
-  if (system_tables_.count(tableName)) return -1;
+  if (!ifDBExists() || !ifTableExists(tableName) || system_tables_.count(tableName)) return -1;
 
   char buffer[PAGE_SIZE] = {0};
   // select from TABLE_C_N where tableId == tableId

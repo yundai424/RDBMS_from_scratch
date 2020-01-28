@@ -18,7 +18,7 @@
  * since we can not create extra files, only put it here:(
  *
 *****************************************/
-//#define MUTE_LOG
+#define MUTE_LOG
 
 enum LogLevel {
   DEBUGGING = 0,

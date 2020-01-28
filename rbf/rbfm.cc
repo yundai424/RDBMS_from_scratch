@@ -159,6 +159,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
   auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
   if (data_to_be_inserted.first != 0) {
     origin_page->freeMem();
+    DB_ERROR << "varchar longer than upper limit";
     return -1;  // varchar longer than upper limit
   }
   size_t new_size = data_to_be_inserted.second.size();
@@ -209,6 +210,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
       new_page->records_offset[new_rid.slotNum].first = Page::REDIRECT_PID;
       origin_page->records_offset[rid.slotNum] = {new_rid.pageNum, new_rid.slotNum};
     }
+    DB_WARNING << "redirect to new page" << new_page->pid << " from " << origin_page->pid;
     if (new_page != origin_page) new_page->dump(fileHandle);
   } else {
     // shift backward/forward inside cur_page
@@ -411,7 +413,8 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recor
 
   // 2. compare if condition is given
   if (cmp != CompOp::NO_OP) {
-    if (fields_offset[cond_field_idx] == -1) return COND_NOT_SATISFIED; // compare NULL always false
+    if (fields_offset[cond_field_idx] == -1)
+      return  COND_NOT_SATISFIED;
     size_t cond_field_start = entryDirectoryOverheadLength(field_num);
     for (int i = cond_field_idx - 1; i >= 0; --i) {
       if (fields_offset[i] != -1) {
@@ -473,8 +476,8 @@ std::pair<bool, Page *> RecordBasedFileManager::loadPageWithRid(const RID &rid, 
   if (rid.slotNum > origin_page->records_offset.size()
       || origin_page->records_offset[rid.slotNum].second == Page::INVALID_OFFSET
       || origin_page->records_offset[rid.slotNum].first == Page::REDIRECT_PID) {
-    DB_WARNING << "RID invalid, slot num " << rid.slotNum << " in page " << rid.pageNum
-               << " not exist, might be deleted or redirected or out of bound";
+//    DB_WARNING << "RID invalid, slot num " << rid.slotNum << " in page " << rid.pageNum
+//               << " not exist, might be deleted or redirected or out of bound";
     origin_page->freeMem();
     return {false, nullptr};
   }
@@ -669,40 +672,37 @@ RC Page::shiftAfterRecords(size_t record_begin_offset, size_t shift_size, bool f
   // get the START of the chunk of records to be moved
   size_t chunk_start = PAGE_SIZE;
   for (auto &offset: records_offset) {
-    if (offset.first != pid && offset.first != REDIRECT_PID) continue;  // redirected to another slot: no need to shift
+    if (offset.first != pid && offset.first != REDIRECT_PID)
+      continue; // forwarding to another slot: no need to shift; forwarded by another: need to shift
     if (offset.second <= record_begin_offset || offset.second == INVALID_OFFSET)
       continue;  // locates before it or deleted
     chunk_start = std::min(chunk_start, size_t(offset.second));
     if (forward) offset.second += shift_size;
     else offset.second -= shift_size;
   }
-  bool need_shift = true;
   if (chunk_start == PAGE_SIZE) {
-    // no following records
-    need_shift = false;
-    DB_DEBUG << "no following records, no need to shift data chunk";
+    if (forward) real_free_space_ -= shift_size;
+    else real_free_space_ += shift_size;
+    maintainFreeSpace();
+    return 0;
   }
   size_t chunk_size = data_end - chunk_start;
   if (forward) {
     real_free_space_ -= shift_size;
-    if (need_shift) {
-      memmove(data + chunk_start + shift_size, data + chunk_start, chunk_size);
-      memset(data + chunk_start, 0, shift_size);
-      DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
-               << ") forward " << shift_size << " bytes";
-    }
+    memmove(data + chunk_start + shift_size, data + chunk_start, chunk_size);
+    memset(data + chunk_start, 0, shift_size);
+    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
+             << ") forward " << shift_size << " bytes";
   } else {
     real_free_space_ += shift_size;
-    if (need_shift) {
-      memmove(data + chunk_start - shift_size, data + chunk_start, chunk_size);
-      if (shift_size > chunk_size)
-        memset(data + chunk_start - shift_size + chunk_size,
-               0,
-               shift_size); // in case there could be some non-zeros after shifting backward
+    memmove(data + chunk_start - shift_size, data + chunk_start, chunk_size);
+    if (shift_size > chunk_size)
+      memset(data + chunk_start - shift_size + chunk_size,
+             0,
+             shift_size); // in case there could be some non-zeros after shifting backward
 
-      DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
-               << ") back " << shift_size << " bytes";
-    }
+    DB_DEBUG << "Page " << pid << " move data chunk start from " << chunk_start << "(size " << chunk_size
+             << ") back " << shift_size << " bytes";
   }
   maintainFreeSpace();
   return 0;
@@ -824,7 +824,7 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
           page_ = std::make_shared<Page>(pid_);
           page_->load(*file_handle_);
           sid_ = 0;
-        } while (!page_->records_offset.empty());
+        } while (page_->records_offset.empty());
       } else ++sid_;
     }
     // read next record
