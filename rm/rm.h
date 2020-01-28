@@ -29,6 +29,8 @@ class RM_ScanIterator {
 // Relation Manager
 class RelationManager {
  public:
+  static const directory_t MAX_SCHEMA_VER;
+
   static RelationManager &instance();
 
   RC createCatalog();
@@ -88,7 +90,8 @@ class RelationManager {
   bool init_;
 
   // TODO: I suspect whether we can store these in memory, or parseCatalog each time
-  std::unordered_map<std::string, std::vector<Attribute>> table_schema_;
+//  std::unordered_map<std::string, std::vector<Attribute>> table_schema_;
+  std::unordered_map<std::string, std::vector<std::vector<Attribute>>> table_schema_;
   std::unordered_map<std::string, std::string> table_files_;
   std::unordered_map<std::string, int> table_ids_;
   std::unordered_set<std::string> system_tables_;
@@ -118,6 +121,7 @@ class RelationManager {
 
   std::vector<char> makeColumnRecord(const std::string &table_name,
                                      const int idx,
+                                     const int ver,
                                      Attribute attr);
 };
 

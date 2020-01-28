@@ -126,16 +126,16 @@ class Page {
    * @param recordDescriptor
    * @param projected_fields
    * @param cmp
-   * @param cond_field_idx
+   * @param cond_field
    * @param cond_value
    * @return if return code is COND_NOT_SATISFIED, nothing will be written to out
    */
   RC readData(PageOffset record_offset,
               void *out,
-              const std::vector<Attribute> &recordDescriptor,
-              const std::vector<bool> &projected_fields,
+              const std::vector<std::vector<Attribute>> &recordDescriptors,
+              const std::vector<std::string> &projected_fields,
               CompOp cmp = CompOp::NO_OP,
-              int cond_field_idx = -1,
+              const std::string &cond_field = "",
               const void *cond_value = nullptr);
 
 
@@ -230,10 +230,9 @@ class RBFM_ScanIterator {
   std::shared_ptr<Page> page_;
   PID pid_;
   SID sid_;
-  std::vector<Attribute> record_descriptor_;
-  std::vector<bool> projected_fields_;
-  std::unordered_map<RID, RID, RIDHash> redirect_map_; // redirected_rid to origin_rid
-  int cond_field_idx_;
+  std::vector<std::vector<Attribute>> schemas_;
+  std::vector<std::string> projected_fields_;
+  std::string cond_field_;
   CompOp comp_op_;
   const void *value_;
   bool init_;
@@ -253,7 +252,7 @@ class RBFM_ScanIterator {
   RC init(
       FileHandle &fileHandle,
       RecordBasedFileManager *rbfm,
-      const std::vector<Attribute> &recordDescriptor,
+      const std::vector<std::vector<Attribute>> &schemas,
       const std::string &conditionAttribute,
       CompOp compOp,
       const void *value,
@@ -263,6 +262,7 @@ class RBFM_ScanIterator {
 
 class RecordBasedFileManager {
   friend class RBFM_ScanIterator;
+  friend class RelationManager;
  public:
 
   static const RC COND_NOT_SATISFIED;
@@ -347,17 +347,48 @@ class RecordBasedFileManager {
   /**
    * reuse by `readRecord` and `readAttribute`
    * @param fileHandle
-   * @param recordDescriptor
+   * @param recordDescriptor schema of different versions
    * @param rid
    * @param data
-   * @param projected_fields
+   * @param projected_fields empty means all
    * @return
    */
   RC readRecordImpl(FileHandle &fileHandle,
-                    const std::vector<Attribute> &recordDescriptor,
+                    const std::vector<std::vector<Attribute>> &recordDescriptors,
                     const RID &rid,
                     void *data,
-                    const std::vector<bool> &projected_fields);
+                    const std::vector<std::string> &projected_fields);
+
+  /**
+   *
+   * @param fileHandle
+   * @param recordDescriptor
+   * @param data
+   * @param rid
+   * @param ver
+   * @return
+   */
+  RC insertRecordImpl(FileHandle &fileHandle,
+                      const std::vector<Attribute> &recordDescriptor,
+                      const void *data,
+                      RID &rid,
+                      const directory_t ver);
+
+  /**
+   *
+   * @param fileHandle
+   * @param recordDescriptor
+   * @param data
+   * @param rid
+   * @param ver
+   * @return
+   */
+  RC updateRecordImpl(FileHandle &fileHandle,
+                      const std::vector<Attribute> &recordDescriptor,
+                      const void *data,
+                      const RID &rid,
+                      const directory_t ver);
+
 
   /**
    * load meta of next page into memory
@@ -380,7 +411,7 @@ class RecordBasedFileManager {
   Page *findAvailableSlot(size_t size, FileHandle &file_handle);
 
   static inline directory_t entryDirectoryOverheadLength(int fields_num) {
-    return sizeof(directory_t) * (fields_num + 1);
+    return sizeof(directory_t) * (fields_num + 2); // one for field_num, one for version
   }
 
   static std::vector<bool> parseNullIndicator(const unsigned char *data, unsigned fields_num);
@@ -399,10 +430,12 @@ class RecordBasedFileManager {
    * encode raw data to std::vector<char> which is ready to be inserted into page
    * @param recordDescriptor
    * @param data
+   * @param ver
    * @return
    */
   static std::pair<RC, std::vector<char>> serializeRecord(const std::vector<Attribute> &recordDescriptor,
-                                                          const void *data);
+                                                          const void *data,
+                                                          const directory_t ver);
 
   /**
    * decode data from record on page
@@ -410,19 +443,18 @@ class RecordBasedFileManager {
    * @param out
    * @param src
    * @param projected_fields
-
    * @param cmp
-   * @param cond_field_idx
+   * @param cond_field empty means None
    * @param cond_value
 
    * @return
    */
-  static RC deserializeRecord(const std::vector<Attribute> &recordDescriptor,
+  static RC deserializeRecord(const std::vector<std::vector<Attribute>> &recordDescriptors,
                               void *out,
                               const char *src,
-                              const std::vector<bool> &projected_fields,
+                              std::vector<std::string> projected_fields,
                               CompOp cmp,
-                              int cond_field_idx,
+                              const std::string &cond_field,
                               const void *cond_value);
 
   static bool cmpAttr(CompOp cmp,

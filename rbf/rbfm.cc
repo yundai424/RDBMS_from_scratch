@@ -38,28 +38,12 @@ RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
 
 RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const void *data, RID &rid) {
-  // use the array of field offsets method for variable length record introduced in class as the format of record
-  // each record has a leading series of bytes indicating the pointers to each field
-  auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
-  if (data_to_be_inserted.first != 0)
-    return -1;  // varchar longer than upper limit
-  size_t total_size = data_to_be_inserted.second.size();
-//  DB_DEBUG << "TOTAL SIZE " << total_size;
-  if (total_size > Page::MAX_SIZE) {
-    DB_ERROR << "data size " << total_size << " larger than MAX_SIZE " << Page::MAX_SIZE;
-    return -1;
-  }
-
-  Page *page = findAvailableSlot(total_size, fileHandle);
-  page->load(fileHandle);
-  rid = page->insertData(data_to_be_inserted.second.data(), data_to_be_inserted.second.size());
-  page->dump(fileHandle);
-  return 0;
+  return insertRecordImpl(fileHandle, recordDescriptor, data, rid, 0);
 }
 
 RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                       const RID &rid, void *data) {
-  return readRecordImpl(fileHandle, recordDescriptor, rid, data, std::vector<bool>(recordDescriptor.size(), true));
+  return readRecordImpl(fileHandle, {recordDescriptor}, rid, data, {});
 }
 
 RC RecordBasedFileManager::printRecord(const std::vector<Attribute> &recordDescriptor, const void *data) {
@@ -137,6 +121,94 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const std::vecto
 
 RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
                                         const void *data, const RID &rid) {
+  return updateRecordImpl(fileHandle, recordDescriptor, data, rid, 0);
+}
+
+RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle,
+                                         const std::vector<Attribute> &recordDescriptor,
+                                         const RID &rid,
+                                         const std::string &attributeName,
+                                         void *data) {
+
+  return readRecordImpl(fileHandle,{recordDescriptor},rid,data,{attributeName});
+}
+
+RC RecordBasedFileManager::scan(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
+                                const std::string &conditionAttribute, const CompOp compOp, const void *value,
+                                const std::vector<std::string> &attributeNames, RBFM_ScanIterator &rbfm_ScanIterator) {
+  return rbfm_ScanIterator.init(fileHandle, this, {recordDescriptor}, conditionAttribute, compOp, value, attributeNames);
+}
+
+/**************************************
+ *
+ * ========= Utility functions ==========
+ *
+ *************************************/
+
+
+RC RecordBasedFileManager::readRecordImpl(FileHandle &fileHandle,
+                                          const std::vector<std::vector<Attribute>> &recordDescriptors,
+                                          const RID &rid,
+                                          void *data,
+                                          const std::vector<std::string> &projected_fields) {
+  auto ret = loadPageWithRid(rid, fileHandle);
+  if (!ret.first) {
+    return -1;
+  }
+
+  Page *origin_page = ret.second;
+
+  auto &record_offset = origin_page->records_offset[rid.slotNum];
+  if (record_offset.first == origin_page->pid) {
+    // in the same page: directly read the record starting at PageOffset
+    origin_page->readData(record_offset.second, data, recordDescriptors, projected_fields);
+  } else if (record_offset.first == Page::REDIRECT_PID) {
+    DB_ERROR << "Illegal direct access to a forwarded slot: " << rid.pageNum << " " << rid.slotNum;
+    return -1;
+  } else {
+    // redirect to another page: the PageOffset entry actually stores the RID at the exact page
+    Page *redirect_page = fileHandle.pages_[record_offset.first].get();
+    redirect_page->load(fileHandle);
+    // if redirected, we use offset to indicate SID in the redirected page
+    PageOffset real_offset = redirect_page->records_offset[record_offset.second].second;
+    redirect_page->readData(real_offset, data, recordDescriptors, projected_fields);
+    redirect_page->freeMem();
+  }
+  origin_page->freeMem();
+
+  return 0;
+}
+
+RC RecordBasedFileManager::insertRecordImpl(FileHandle &fileHandle,
+                                            const std::vector<Attribute> &recordDescriptor,
+                                            const void *data,
+                                            RID &rid,
+                                            const directory_t ver) {
+  // use the array of field offsets method for variable length record introduced in class as the format of record
+  // each record has a leading series of bytes indicating the pointers to each field
+  auto data_to_be_inserted = serializeRecord(recordDescriptor, data, ver);
+
+  if (data_to_be_inserted.first != 0)
+    return -1;  // varchar longer than upper limit
+  size_t total_size = data_to_be_inserted.second.size();
+//  DB_DEBUG << "TOTAL SIZE " << total_size;
+  if (total_size > Page::MAX_SIZE) {
+    DB_ERROR << "data size " << total_size << " larger than MAX_SIZE " << Page::MAX_SIZE;
+    return -1;
+  }
+
+  Page *page = findAvailableSlot(total_size, fileHandle);
+  page->load(fileHandle);
+  rid = page->insertData(data_to_be_inserted.second.data(), data_to_be_inserted.second.size());
+  page->dump(fileHandle);
+  return 0;
+}
+
+RC RecordBasedFileManager::updateRecordImpl(FileHandle &fileHandle,
+                                            const std::vector<Attribute> &recordDescriptor,
+                                            const void *data,
+                                            const RID &rid,
+                                            const directory_t ver) {
   auto ret = loadPageWithRid(rid, fileHandle);
   if (!ret.first) {
     DB_WARNING << "updateRecord failed, RID invalid";
@@ -148,7 +220,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
   /*
    * serialize data just like insert
    */
-  auto data_to_be_inserted = serializeRecord(recordDescriptor, data);
+  auto data_to_be_inserted = serializeRecord(recordDescriptor, data, ver);
   if (data_to_be_inserted.first != 0) {
     origin_page->freeMem();
     return -1;  // varchar longer than upper limit
@@ -215,71 +287,6 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const std::vecto
   return 0;
 }
 
-RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle,
-                                         const std::vector<Attribute> &recordDescriptor,
-                                         const RID &rid,
-                                         const std::string &attributeName,
-                                         void *data) {
-  auto it = std::find_if(recordDescriptor.begin(),
-                         recordDescriptor.end(),
-                         [&](const Attribute &attr) { return attr.name == attributeName; });
-  if (it == recordDescriptor.end()) {
-    DB_WARNING << "No such attribute: " << attributeName;
-    return -1;
-  }
-  int field_idx = it - recordDescriptor.begin();
-  std::vector<bool> projected_fields(recordDescriptor.size(), false);
-  projected_fields[field_idx] = true;
-
-  return readRecordImpl(fileHandle, recordDescriptor, rid, data, projected_fields);
-}
-
-RC RecordBasedFileManager::scan(FileHandle &fileHandle, const std::vector<Attribute> &recordDescriptor,
-                                const std::string &conditionAttribute, const CompOp compOp, const void *value,
-                                const std::vector<std::string> &attributeNames, RBFM_ScanIterator &rbfm_ScanIterator) {
-  return rbfm_ScanIterator.init(fileHandle, this, recordDescriptor, conditionAttribute, compOp, value, attributeNames);
-}
-
-/**************************************
- *
- * ========= Utility functions ==========
- *
- *************************************/
-
-
-RC RecordBasedFileManager::readRecordImpl(FileHandle &fileHandle,
-                                          const std::vector<Attribute> &recordDescriptor,
-                                          const RID &rid,
-                                          void *data,
-                                          const std::vector<bool> &projected_fields) {
-  auto ret = loadPageWithRid(rid, fileHandle);
-  if (!ret.first) {
-    return -1;
-  }
-
-  Page *origin_page = ret.second;
-
-  auto &record_offset = origin_page->records_offset[rid.slotNum];
-  if (record_offset.first == origin_page->pid) {
-    // in the same page: directly read the record starting at PageOffset
-    origin_page->readData(record_offset.second, data, recordDescriptor, projected_fields);
-  } else if (record_offset.first == Page::REDIRECT_PID) {
-    DB_ERROR << "Illegal direct access to a forwarded slot: " << rid.pageNum << " " << rid.slotNum;
-    return -1;
-  } else {
-    // redirect to another page: the PageOffset entry actually stores the RID at the exact page
-    Page *redirect_page = fileHandle.pages_[record_offset.first].get();
-    redirect_page->load(fileHandle);
-    // if redirected, we use offset to indicate SID in the redirected page
-    PageOffset real_offset = redirect_page->records_offset[record_offset.second].second;
-    redirect_page->readData(real_offset, data, recordDescriptor, projected_fields);
-    redirect_page->freeMem();
-  }
-  origin_page->freeMem();
-
-  return 0;
-}
-
 void RecordBasedFileManager::loadNextPage(FileHandle &fileHandle) {
   // construct a Page object, read page to buffer, parse meta in corresponding data to initialize in-memory variables,
   //   then free buffer up
@@ -317,7 +324,8 @@ std::vector<bool> RecordBasedFileManager::parseNullIndicator(const unsigned char
 
 std::pair<RC, std::vector<char>>
 RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDescriptor,
-                                        const void *data) {
+                                        const void *data,
+                                        const directory_t ver) {
   // parse null indicators
   int fields_num = recordDescriptor.size();
   int indicator_bytes_num = int(ceil(double(fields_num) / 8));
@@ -328,8 +336,9 @@ RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDesc
 
   // create directories: "array of field offsets"
   // the first element in the array indicates the number of fields in this record
+  // the second element indicates the schema version
   // then the following elements indicate the END of records instead of head
-  std::vector<directory_t> directories{directory_t(fields_num)};
+  std::vector<directory_t> directories{directory_t(fields_num), ver};
   directory_t offset = entryDirectoryOverheadLength(fields_num); // offset from the head of encoded record
   int raw_offset = indicator_bytes_num;
   for (int i = 0; i < fields_num; ++i) {
@@ -363,78 +372,112 @@ RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDesc
   return {0, decoded_data};
 }
 
-RC RecordBasedFileManager::deserializeRecord(const std::vector<Attribute> &recordDescriptor,
+RC RecordBasedFileManager::deserializeRecord(const std::vector<std::vector<Attribute>> &recordDescriptors,
                                              void *out,
                                              const char *src,
-                                             const std::vector<bool> &projected_fields,
+                                             std::vector<std::string> projected_fields,
                                              CompOp cmp,
-                                             int cond_field_idx,
+                                             const std::string &cond_field,
                                              const void *cond_value) {
 
-  // 1. make null indicator
-  int projected_fields_num = std::count(projected_fields.begin(), projected_fields.end(), true);
+  // 1. parse schema version
+  const std::vector<Attribute> &cur_schema = recordDescriptors.back();
+  directory_t cur_schema_ver = recordDescriptors.size() - 1;
+  directory_t *dir_pt = (directory_t *) src;
+  directory_t data_field_num = *dir_pt++;
+  directory_t data_schema_ver = *dir_pt++;
+  const std::vector<Attribute> &data_schema = recordDescriptors.at(data_schema_ver);
+  if (data_field_num != data_schema.size()) {
+    DB_ERROR << "field num not matched. " << data_schema.size() << " given in recordDescriptor, " << data_field_num
+             << " found in data";
+    return -1;
+  }
+
+  // 2. mapping fields between cur_schema and data_schema
+  if (projected_fields.empty()) {
+    // all fields
+    std::transform(cur_schema.begin(),
+                   cur_schema.end(),
+                   std::back_inserter(projected_fields),
+                   [](const Attribute &attr) { return attr.name; });
+  } else {
+    for (auto &projected_field: projected_fields) {
+      if (std::find_if(cur_schema.begin(),
+                       cur_schema.end(),
+                       [&](const Attribute &attr) { return attr.name == projected_field; }) == cur_schema.end()) {
+        DB_ERROR << "projected field `" << projected_field << "`" << "not found";
+        return -1;
+      }
+    }
+  }
+  std::unordered_map<std::string, int> data_field_to_idx;
+  for (int i = 0; i < data_schema.size(); ++i) {
+    data_field_to_idx[data_schema[i].name] = i;
+  }
+
+  // 3. parse fields offset
+  size_t directory_size = entryDirectoryOverheadLength(data_field_num);
+  size_t prev_offset = directory_size;
+  std::vector<std::tuple<bool, size_t, size_t >> fields_offset; // is_null, start, size
+
+  for (int i = 0; i < data_field_num; ++i) {
+    directory_t offset = *dir_pt++;
+    if (offset == -1) {// null
+
+      fields_offset.emplace_back(true, 0, 0);
+    } else {
+      // here we don't need to handle varchar as special case,
+      // since we already store that int for varchar len
+      directory_t field_size = offset - prev_offset;
+      fields_offset.emplace_back(false, prev_offset, field_size);
+      prev_offset = offset;
+    }
+  }
+
+
+  // 4. compare if condition is given
+  if (cmp != CompOp::NO_OP) {
+    auto cond_it = std::find_if(data_schema.begin(), data_schema.end(), [&](const Attribute &attr) {
+      return attr.name == cond_field;
+    });
+    if (cond_it != data_schema.end()) {
+      int cond_field_idx = cond_it - data_schema.begin();
+      if (std::get<0>(fields_offset[cond_field_idx])) return COND_NOT_SATISFIED; // compare NULL always false
+      size_t cond_field_start = std::get<1>(fields_offset[cond_field_idx]);
+      if (!cmpAttr(cmp, data_schema[cond_field_idx].type, src + cond_field_start, cond_value)) {
+        return COND_NOT_SATISFIED;
+      }
+    }
+  }
+
+  // 5. make null indicator
+  int projected_fields_num = projected_fields.size();
   int indicator_bytes_num = int(ceil(double(projected_fields_num) / 8));
   unsigned char indicator_bytes[indicator_bytes_num];
   memset(indicator_bytes, 0, indicator_bytes_num);
   unsigned char *pt = indicator_bytes;
-  directory_t *dir_pt = (directory_t *) src;
-  directory_t field_num = *dir_pt++;
-  if (field_num != recordDescriptor.size()) {
-    DB_ERROR << "field num not matched. " << recordDescriptor.size() << " given in recordDescriptor, " << field_num
-             << " found in data";
-    return -1;
-  }
-  std::vector<int> fields_offset;
-  for (int i = 0, j = 0; i < field_num; ++i) {
-    fields_offset.push_back(*dir_pt++);
-    if (projected_fields[i]) {
-      // if field projected, set null indicator
-      if (fields_offset.back() == -1) {
-        unsigned char mask = 1 << (7 - (j % 8));
-        *pt = *pt | mask;
-      }
-      if (j % 8 == 7) ++pt;
-      ++j;
+  for (int i = 0; i < projected_fields_num; ++i) {
+    if (!data_field_to_idx.count(projected_fields[i]) ||
+        std::get<0>(fields_offset[data_field_to_idx.at(projected_fields[i])])) {
+      unsigned char mask = 1 << (7 - (i % 8));
+      *pt = *pt | mask;
     }
   }
 
   char *out_pt = (char *) out;
 
-  // 2. compare if condition is given
-  if (cmp != CompOp::NO_OP) {
-    if (fields_offset[cond_field_idx] == -1) return COND_NOT_SATISFIED; // compare NULL always false
-    size_t cond_field_start = entryDirectoryOverheadLength(field_num);
-    for (int i = cond_field_idx - 1; i >= 0; --i) {
-      if (fields_offset[i] != -1) {
-        cond_field_start = fields_offset[i];
-        break;
-      }
-    }
-    if (!cmpAttr(cmp, recordDescriptor[cond_field_idx].type, src + cond_field_start, cond_value)) {
-      return COND_NOT_SATISFIED;
-    }
-  }
-
   memcpy(out_pt, indicator_bytes, indicator_bytes_num);
   out_pt += indicator_bytes_num;
 
-  // 3. write data
-
-  size_t directory_size = entryDirectoryOverheadLength(field_num);
-  src += directory_size; // begin of real data
-
-  size_t prev_offset = directory_size;
-  for (int i = 0; i < fields_offset.size(); ++i) {
-    if (fields_offset[i] == -1) continue; // null
-    unsigned field_size = fields_offset[i] - prev_offset;
-    prev_offset = fields_offset[i];
-    // here we don't need to handle varchar as special case,
-    // since we already store that int for varchar len
-    if (projected_fields[i]) {
-      memcpy(out_pt, src, field_size);
-      out_pt += field_size;
-    }
-    src += field_size;
+  // 6. copy data
+  for (auto &projected_field:projected_fields) {
+    if (!data_field_to_idx.count(projected_field)) continue;// new field, old data, set null
+    int idx = data_field_to_idx.at(projected_field);
+    if (std::get<0>(fields_offset[idx])) continue;
+    size_t field_begin = std::get<1>(fields_offset[idx]);
+    size_t field_size = std::get<2>(fields_offset[idx]);
+    memcpy(out_pt, src + field_begin, field_size);
+    out_pt += field_size;
   }
 
   return 0;
@@ -572,17 +615,17 @@ RC Page::deleteRecord(size_t record_begin_offset) {
 
 RC Page::readData(PageOffset record_offset,
                   void *out,
-                  const std::vector<Attribute> &recordDescriptor,
-                  const std::vector<bool> &projected_fields,
+                  const std::vector<std::vector<Attribute>> &recordDescriptors,
+                  const std::vector<std::string> &projected_fields,
                   CompOp cmp,
-                  int cond_field_idx,
+                  const std::string &cond_field,
                   const void *cond_value) {
-  return RecordBasedFileManager::deserializeRecord(recordDescriptor,
+  return RecordBasedFileManager::deserializeRecord(recordDescriptors,
                                                    out,
                                                    data + record_offset,
                                                    projected_fields,
                                                    cmp,
-                                                   cond_field_idx,
+                                                   cond_field,
                                                    cond_value);
 }
 
@@ -706,6 +749,7 @@ size_t Page::getRecordSize(const char *begin) {
 
   directory_t *dir_pt = (directory_t *) (begin);
   directory_t field_num = *dir_pt++;
+  dir_pt++; // skip version
 
   int last_field_end = 0;
   for (int i = 0; i < field_num; ++i) {
@@ -747,7 +791,7 @@ RC RBFM_ScanIterator::close() {
 
 RC RBFM_ScanIterator::init(FileHandle &fileHandle,
                            RecordBasedFileManager *rbfm,
-                           const std::vector<Attribute> &recordDescriptor,
+                           const std::vector<std::vector<Attribute>> &schemas,
                            const std::string &conditionAttribute,
                            CompOp compOp,
                            const void *value,
@@ -757,39 +801,11 @@ RC RBFM_ScanIterator::init(FileHandle &fileHandle,
   file_handle_ = &fileHandle;
   pid_ = 0;
   sid_ = 0;
-  redirect_map_.clear();
-  record_descriptor_ = recordDescriptor;
-  projected_fields_ = std::vector<bool>(record_descriptor_.size(), false);
+  schemas_ = schemas;
+  projected_fields_ = attributeNames;
+  cond_field_ = conditionAttribute;
   comp_op_ = compOp;
   value_ = value;
-
-  // parse projected fields
-  for (auto &attr: attributeNames) {
-    bool found = false;
-    for (int i = 0; i < record_descriptor_.size(); ++i) {
-      if (record_descriptor_[i].name == attr) {
-        found = true;
-        projected_fields_[i] = true;
-        break;
-      }
-    }
-    if (!found) {
-      DB_ERROR << "attribute `" << attr << "` not found in recordDescriptor";
-      return -1;
-    }
-  }
-
-  // parse condition fields
-  if (comp_op_ != CompOp::NO_OP) {
-    auto it = std::find_if(record_descriptor_.begin(), record_descriptor_.end(), [&](const Attribute &attr) {
-      return attr.name == conditionAttribute;
-    });
-    if (it == record_descriptor_.end()) {
-      DB_ERROR << "condition attribute " << conditionAttribute << " not found in recordDescriptor";
-      return -1;
-    }
-    cond_field_idx_ = it - record_descriptor_.begin();
-  }
 
   return 0;
 }
@@ -841,10 +857,10 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
     if (offset.second == Page::INVALID_OFFSET) continue;
     RC ret = actual_page->readData(offset.second,
                                    data,
-                                   record_descriptor_,
+                                   schemas_,
                                    projected_fields_,
                                    comp_op_,
-                                   cond_field_idx_,
+                                   cond_field_,
                                    value_);
     if (actual_page != page_) {
       // redirected page

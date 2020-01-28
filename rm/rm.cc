@@ -11,7 +11,10 @@ const std::vector<Attribute> RelationManager::COLUMN_CATALOG_DESC_ = {{"table-id
                                                                       {"column-name", AttrType::TypeVarChar, 50},
                                                                       {"column-type", AttrType::TypeInt, 4},
                                                                       {"column-length", AttrType::TypeInt, 4},
-                                                                      {"column-position", AttrType::TypeInt, 4}};
+                                                                      {"column-position", AttrType::TypeInt, 4},
+                                                                      {"column-ver", AttrType::TypeInt, 4}};
+
+const directory_t RelationManager::MAX_SCHEMA_VER = INT16_MAX;
 
 RelationManager &RelationManager::instance() {
   static RelationManager _relation_manager = RelationManager();
@@ -36,8 +39,8 @@ RC RelationManager::createCatalog() {
   rbfm_->createFile(getTableFileName(COLUMN_CATALOG_NAME_, true));
   table_files_[TABLE_CATALOG_NAME_] = getTableFileName(TABLE_CATALOG_NAME_, true);
   table_files_[COLUMN_CATALOG_NAME_] = getTableFileName(COLUMN_CATALOG_NAME_, true);
-  table_schema_[TABLE_CATALOG_NAME_] = TABLE_CATALOG_DESC_;
-  table_schema_[COLUMN_CATALOG_NAME_] = COLUMN_CATALOG_DESC_;
+  table_schema_[TABLE_CATALOG_NAME_].push_back(TABLE_CATALOG_DESC_);
+  table_schema_[COLUMN_CATALOG_NAME_].push_back(COLUMN_CATALOG_DESC_);
   table_ids_[TABLE_CATALOG_NAME_] = ++max_tid_;
   table_ids_[COLUMN_CATALOG_NAME_] = ++max_tid_;
   system_tables_ = {TABLE_CATALOG_NAME_, COLUMN_CATALOG_NAME_};
@@ -75,7 +78,10 @@ RC RelationManager::deleteTable(const std::string &tableName) {
   DB_DEBUG << "deleting table `" << tableName << "`";
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
-  if (system_tables_.count(tableName)) return -1;
+  if (system_tables_.count(tableName)) {
+    DB_ERROR << "Your're not allowed to delete system table";
+    return -1;
+  }
 
   char buffer[PAGE_SIZE] = {0};
   // select from TABLE_C_N where tableId == tableId
@@ -122,7 +128,7 @@ RC RelationManager::deleteTable(const std::string &tableName) {
 RC RelationManager::getAttributes(const std::string &tableName, std::vector<Attribute> &attrs) {
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
-  attrs = table_schema_.at(tableName);
+  attrs = table_schema_.at(tableName).back();
   return 0;
 }
 
@@ -138,10 +144,11 @@ RC RelationManager::insertTupleImpl(const std::string &tableName, const void *da
   }
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
-  const auto &recordDescriptor = table_schema_.at(tableName);
+  const auto &recordDescriptor = table_schema_.at(tableName).back();
+  directory_t cur_ver = table_schema_.at(tableName).size() - 1;
   FileHandle fh;
   rbfm_->openFile(table_file, fh);
-  RC ret = rbfm_->insertRecord(fh, recordDescriptor, data, rid);
+  RC ret = rbfm_->insertRecordImpl(fh, recordDescriptor, data, rid, cur_ver);
   rbfm_->closeFile(fh);
   return ret;
 }
@@ -158,7 +165,7 @@ RC RelationManager::deleteTupleImpl(const std::string &tableName, const RID &rid
   }
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
-  const auto &recordDescriptor = table_schema_.at(tableName);
+  const auto &recordDescriptor = table_schema_.at(tableName).back(); // actually we don't need schema when deleting
   FileHandle fh;
   rbfm_->openFile(table_file, fh);
   RC ret = rbfm_->deleteRecord(fh, recordDescriptor, rid);
@@ -178,10 +185,12 @@ RC RelationManager::updateTupleImpl(const std::string &tableName, const void *da
   }
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
-  const auto &recordDescriptor = table_schema_.at(tableName);
+  // when update, we don't need old schema, we only need to calculate the old size
+  const auto &recordDescriptor = table_schema_.at(tableName).back();
+  directory_t cur_ver = table_schema_.at(tableName).size() - 1;
   FileHandle fh;
   rbfm_->openFile(table_file, fh);
-  RC ret = rbfm_->updateRecord(fh, recordDescriptor, data, rid);
+  RC ret = rbfm_->updateRecordImpl(fh, recordDescriptor, data, rid, cur_ver);
   rbfm_->closeFile(fh);
   return ret;
 }
@@ -190,18 +199,16 @@ RC RelationManager::readTuple(const std::string &tableName, const RID &rid, void
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
-  const auto &recordDescriptor = table_schema_.at(tableName);
+  const auto &recordDescriptors = table_schema_.at(tableName);
   FileHandle fh;
   rbfm_->openFile(table_file, fh);
-  RC ret = rbfm_->readRecord(fh, recordDescriptor, rid, data);
+  RC ret = rbfm_->readRecordImpl(fh, recordDescriptors, rid, data, {});
   rbfm_->closeFile(fh);
   return ret;
 }
 
 RC RelationManager::printTuple(const std::vector<Attribute> &attrs, const void *data) {
-  if (!rbfm_->printRecord(attrs, data))
-    return -1;
-  return 0;
+  return rbfm_->printRecord(attrs, data);
 }
 
 RC RelationManager::readAttribute(const std::string &tableName, const RID &rid, const std::string &attributeName,
@@ -209,10 +216,10 @@ RC RelationManager::readAttribute(const std::string &tableName, const RID &rid, 
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
-  const auto &recordDescriptor = table_schema_.at(tableName);
+  const auto &recordDescriptors = table_schema_.at(tableName);
   FileHandle fh;
   rbfm_->openFile(table_file, fh);
-  RC ret = rbfm_->readAttribute(fh, recordDescriptor, rid, attributeName, data);
+  RC ret = rbfm_->readRecordImpl(fh, recordDescriptors, rid, data, {attributeName});
   rbfm_->closeFile(fh);
   return ret;
 }
@@ -226,15 +233,24 @@ RC RelationManager::scan(const std::string &tableName,
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   const auto &table_file = table_files_.at(tableName);
-  const auto &recordDescriptor = table_schema_.at(tableName);
+  const auto &schemas = table_schema_.at(tableName);
+  const std::vector<Attribute> &cur_schema = schemas.back();
+  if (compOp != CompOp::NO_OP
+      && std::find_if(cur_schema.begin(), cur_schema.end(), [&](const Attribute &attr) {
+        return attr.name == conditionAttribute;
+      }) == cur_schema.end()) {
+    DB_ERROR << "Condition attribute `" << conditionAttribute << "` not found in table `" << tableName << "`";
+    return -1;
+  }
   rbfm_->openFile(table_file, rm_ScanIterator.file_handle_);
-  RC ret = rbfm_->scan(rm_ScanIterator.file_handle_,
-                       recordDescriptor,
-                       conditionAttribute,
-                       compOp,
-                       value,
-                       attributeNames,
-                       rm_ScanIterator.rbfm_scan_iterator_);
+  RC ret = rm_ScanIterator.rbfm_scan_iterator_.init(rm_ScanIterator.file_handle_,
+                                                    rbfm_,
+                                                    schemas,
+                                                    conditionAttribute,
+                                                    compOp,
+                                                    value,
+                                                    attributeNames);
+
   return ret;
 }
 
@@ -242,34 +258,65 @@ RC RelationManager::scan(const std::string &tableName,
 RC RelationManager::dropAttribute(const std::string &tableName, const std::string &attributeName) {
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
-  return -1;
+  if (system_tables_.count(tableName)) return -1;
+  std::vector<Attribute> cur_schema = table_schema_.at(tableName).back();
+  auto it = std::find_if(cur_schema.begin(),
+                         cur_schema.end(),
+                         [&](const Attribute &attr) { return attr.name == attributeName; });
+  if (it == cur_schema.end()) {
+    DB_ERROR << "Drop attribute `" << attributeName << "` in table `" << tableName << "` failed, attribute not exist!";
+    return -1;
+  }
+  cur_schema.erase(it);
+  return createTableImpl(tableName, cur_schema);
 }
 
 // Extra credit work
 RC RelationManager::addAttribute(const std::string &tableName, const Attribute &attr) {
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
-  return -1;
+  if (system_tables_.count(tableName)) return -1;
+  std::vector<Attribute> cur_schema = table_schema_.at(tableName).back();
+  auto it = std::find_if(cur_schema.begin(),
+                         cur_schema.end(),
+                         [&](const Attribute &a) { return a.name == attr.name; });
+  if (it != cur_schema.end()) {
+    DB_ERROR << "Add attribute `" << attr.name << "` in table `" << tableName << "` failed, attribute already exist!";
+    return -1;
+  }
+  cur_schema.push_back(attr);
+  return createTableImpl(tableName, cur_schema);
 }
 
 RC RelationManager::createTableImpl(const std::string &tableName,
                                     const std::vector<Attribute> &attrs,
                                     bool is_system_table) {
+  directory_t ver = 0; // by default, system table will always has one version
   if (!is_system_table) {
     // for system table, these must be created before hand
-    table_schema_[tableName] = attrs;
-    table_files_[tableName] = getTableFileName(tableName, is_system_table);
-    rbfm_->createFile(table_files_[tableName]);
-    table_ids_[tableName] = ++max_tid_;
-    DB_DEBUG << "Create table `" << tableName << "` with tid " << max_tid_;
+    ver = table_schema_[tableName].size();
+    if (ver == MAX_SCHEMA_VER) {
+      DB_ERROR << "exceed schema max version " << MAX_SCHEMA_VER;
+      return -1;
+    }
+    table_schema_[tableName].push_back(attrs);
+    if (!ver) {
+      table_files_[tableName] = getTableFileName(tableName, is_system_table);
+      rbfm_->createFile(table_files_[tableName]);
+      table_ids_[tableName] = ++max_tid_;
+      DB_DEBUG << "Create table `" << tableName << "` with tid " << max_tid_;
+    }
+  }
+  if (!ver) {
+    // only create table at version 0
+    auto table_data = makeTableRecord(tableName, is_system_table);
+//  rbfm_->printRecord(TABLE_CATALOG_DESC_, table_data.data());
+    RID tbl_id;
+    if (insertTupleImpl(TABLE_CATALOG_NAME_, table_data.data(), tbl_id, true) != 0) return -1;
   }
 
-  auto table_data = makeTableRecord(tableName, is_system_table);
-//  rbfm_->printRecord(TABLE_CATALOG_DESC_, table_data.data());
-  RID tbl_id;
-  if (insertTupleImpl(TABLE_CATALOG_NAME_, table_data.data(), tbl_id, true) != 0) return -1;
   for (int i = 0; i < attrs.size(); ++i) {
-    auto column_data = makeColumnRecord(tableName, i, attrs[i]);
+    auto column_data = makeColumnRecord(tableName, i, ver, attrs[i]);
 //    rbfm_->printRecord(COLUMN_CATALOG_DESC_, column_data.data());
     RID col_id;
     if (insertTupleImpl(COLUMN_CATALOG_NAME_, column_data.data(), col_id, true) != 0) return -1;
@@ -315,12 +362,14 @@ std::vector<char> RelationManager::makeTableRecord(const std::string &table_name
 
 std::vector<char> RelationManager::makeColumnRecord(const std::string &table_name,
                                                     const int idx,
+                                                    const int ver,
                                                     Attribute attr) {
-  int null_indicator_length = int(ceil(double(4) / 8));
+  int null_indicator_length = int(ceil(double(6) / 8));
   unsigned column_record_length = null_indicator_length; // null indicator
+  column_record_length += sizeof(int); // ver
   column_record_length += sizeof(int); // table id
   column_record_length += sizeof(int) + attr.name.size(); // column name
-  column_record_length += 3 * sizeof(int); // column type, length, position
+  column_record_length += 4 * sizeof(int); // column type, length, position, ver
 
 
 //  DB_DEBUG << "column record length of: " << table_name << "," << attr.name << " is " << column_record_length;
@@ -349,7 +398,11 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
   offset += sizeof(int);
   // col pos
   memcpy(column_record.data() + offset, &idx, sizeof(int));
+  offset += sizeof(int);
+  // ver
+  memcpy(column_record.data() + offset, &ver, sizeof(int));
   return column_record;
+
 }
 
 void RelationManager::parseCatalog() {
@@ -367,7 +420,7 @@ void RelationManager::parseCatalog() {
   RID rid;
   char buffer[PAGE_SIZE];
   while (table_scan_iterator.getNextRecord(rid, buffer) != RBFM_EOF) {
-    int offset = 1; // null indicator
+    int offset = sizeof(char); // null indicator
     int table_id = *(buffer + offset);
     offset += sizeof(int);
     int tab_name_len = *(buffer + offset);
@@ -394,7 +447,10 @@ void RelationManager::parseCatalog() {
   fh_table.closeFile();
 
   // parse Column.catalog
-  std::unordered_map<int, std::vector<std::pair<int, Attribute>>> cols_by_tid; // map<tid, vector<<col_pos, attr>>>
+
+  // unordered_map<tid, map<ver, vector<<col_pos, attr>>>>
+  std::unordered_map<int, std::map<int, std::vector<std::pair<int, Attribute>>>> cols_by_tid;
+
   FileHandle fh_col;
   rbfm_->openFile(getTableFileName(COLUMN_CATALOG_NAME_, true), fh_col);
   RBFM_ScanIterator col_scan_iterator;
@@ -406,7 +462,7 @@ void RelationManager::parseCatalog() {
               col_scan_iterator);
   while (col_scan_iterator.getNextRecord(rid, buffer) != RBFM_EOF) {
     Attribute col;
-    int offset = 1;
+    int offset = sizeof(char); // skip null indicator
     int table_id = *(buffer + offset);
     offset += sizeof(int);
     int attr_name_len = *(buffer + offset);
@@ -419,37 +475,43 @@ void RelationManager::parseCatalog() {
     offset += sizeof(int);
     int attr_pos = *(buffer + offset);
     offset += sizeof(int);
-    cols_by_tid[table_id].emplace_back(attr_pos, col);
+    int ver = *(buffer + offset);
+    cols_by_tid[table_id][ver].emplace_back(attr_pos, col);
   }
   col_scan_iterator.close();
   fh_col.closeFile();
 
   // store parsed info to table_schema_
   std::unordered_set<int> visited;
-  for (auto &table:cols_by_tid) {
+  for (std::pair<const int, std::map<int, std::vector<std::pair<int, Attribute>>>> &table:cols_by_tid) {
     auto tid = table.first;
-    visited.insert(tid);
-    auto &cols = table.second;
     if (!id_tables_map.count(tid)) {
       DB_ERROR << "tid " << tid << " not exist!";
       throw std::runtime_error("Parse schema error");
     }
     std::string table_name = id_tables_map.at(table.first);
-    std::sort(cols.begin(),
-              cols.end(),
-              [](const std::pair<int, Attribute> &p1, const std::pair<int, Attribute> &p2) {
-                return p1.first < p2.first;
-              });
-    if (cols.back().first != cols.size() - 1) {
-      DB_ERROR << "max col pos " << cols.back().first << " while cols.size() == " << cols.size();
-      throw std::runtime_error("Parse schema error");
+    visited.insert(tid);
+    if (table.second.rbegin()->first + 1 != table.second.size()) {
+      DB_ERROR << "table `" << id_tables_map.at(tid) << "` version number not match, max_ver "
+               << table.second.rbegin()->first << ", should be " << (table.second.size() - 1);
+      throw std::runtime_error("table version number not match");
     }
-    if (table_schema_.count(table_name)) {
-      DB_ERROR << "table name `" << table_name << "` conflict!";
-      throw std::runtime_error("Parse schema error");
+    for (auto &ver:table.second) {
+      auto &cols = ver.second;
+      std::sort(cols.begin(),
+                cols.end(),
+                [](const std::pair<int, Attribute> &p1, const std::pair<int, Attribute> &p2) {
+                  return p1.first < p2.first;
+                });
+      if (cols.back().first != cols.size() - 1) {
+        DB_ERROR << "max col pos " << cols.back().first << " while cols.size() == " << cols.size();
+        throw std::runtime_error("Parse schema error");
+      }
+      table_schema_[table_name].emplace_back();
+      std::vector<Attribute> &schema = table_schema_[table_name].back();
+      for (auto &col : cols)
+        schema.push_back(col.second);
     }
-    for (auto &col : cols)
-      table_schema_[table_name].push_back(col.second);
   }
   for (auto &kv : id_tables_map)
     if (!visited.count(kv.first)) {
@@ -465,14 +527,17 @@ void RelationManager::printTables() {
       {AttrType::TypeReal, "TypeReal"},
       {AttrType::TypeVarChar, "TypeVarChar"}
   };
-  std::vector<std::pair<int, std::string>> tables;
-  for (auto &kv :table_ids_) tables.emplace_back(kv.second, kv.first);
-  std::sort(tables.begin(), tables.end());
+  std::map<int, std::string> id_to_tables;
+  for (auto &kv :table_ids_) id_to_tables[kv.second] = kv.first;
   // print sorted by tid
-  for (auto &t : tables) {
+  for (auto &t : id_to_tables) {
     DB_INFO << "Table: " << t.second;
-    for (auto &attr : table_schema_.at(t.second)) {
-      DB_INFO << "    " << attr.name << "\t" << TypeNameMap.at(attr.type) << "\t" << attr.length;
+    auto &vers = table_schema_.at(t.second);
+    for (int v = 0; v < vers.size(); ++v) {
+      DB_INFO << "version " << v;
+      for (auto &attr : vers[v]) {
+        DB_INFO << "    " << attr.name << "\t" << TypeNameMap.at(attr.type) << "\t" << attr.length;
+      }
     }
   }
 }
