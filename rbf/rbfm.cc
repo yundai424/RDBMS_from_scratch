@@ -462,6 +462,7 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<std::vector<Attri
       unsigned char mask = 1 << (7 - (i % 8));
       *pt = *pt | mask;
     }
+    if (i % 8 == 7) pt++;
   }
 
   char *out_pt = (char *) out;
@@ -521,7 +522,7 @@ bool RecordBasedFileManager::cmpAttr(CompOp cmp,
                                      const void *val2) {
   static const std::unordered_map<CompOp, std::function<bool(int, int)>, EnumHash> int_op_map{
       {CompOp::EQ_OP, std::equal_to<int>()},
-      {CompOp::NE_OP, std::equal_to<int>()},
+      {CompOp::NE_OP, std::not_equal_to<int>()},
       {CompOp::LT_OP, std::less<int>()},
       {CompOp::LE_OP, std::less_equal<int>()},
       {CompOp::GT_OP, std::greater<int>()},
@@ -529,7 +530,7 @@ bool RecordBasedFileManager::cmpAttr(CompOp cmp,
   };
   static const std::unordered_map<CompOp, std::function<bool(float, float)>, EnumHash> float_op_map{
       {CompOp::EQ_OP, std::equal_to<float>()},
-      {CompOp::NE_OP, std::equal_to<float>()},
+      {CompOp::NE_OP, std::not_equal_to<float>()},
       {CompOp::LT_OP, std::less<float>()},
       {CompOp::LE_OP, std::less_equal<float>()},
       {CompOp::GT_OP, std::greater<float>()},

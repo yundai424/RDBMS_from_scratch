@@ -1,8 +1,8 @@
 1. Basic information
-Team #:
-Github Repo Link:
-Student 1 UCI NetID:
-Student 1 Name:
+Team #: 12
+Github Repo Link: https://github.com/UCI-Chenli-teaching/cs222p-winter20-team-12
+Student 1 UCI NetID: yund9
+Student 1 Name: Yun Dai
 Student 2 UCI NetID (if applicable):
 Student 2 Name (if applicable):
 
@@ -10,31 +10,92 @@ Student 2 Name (if applicable):
 2. Meta-data
 - Show your meta-data design (Tables and Columns table) and information about each column.
 
+  I store all information about tables and columns in two system catalog tables: Tables.catalog and Columns.catalog, including the information of themselves, i.e. these two catalogs are self-descriptive. The design of Tables and Columns table strictly follows the schema provided by the project instruction, except that in Tables.catalog I add another attributed called "is-system" to identify if this table is a sytem catalog, and that in Columns.catalog I use another TypeInt attribute to store the version of the column. The schemas of Tables and Columns table are stored in memory as constant variables for convenience.
+
 
 3. Internal Record Format
 - Show your record format design and describe how your design satisfies O(1) field access. If not, just mention that your team hasn't implemented this feature.
 
+  The idea is basically the same with the record format for variable length records introduced in the lecture. That is, at the beginning of each record in my file, there are (n + 1) signed short offset variables (n = number of fields), in which the first one indicates the total number of fields in this record, and each of the rest stores the offset of the end of corresponding field, with respect to the beginning of this record (including directories). If one field has a NULL value, then the corresponding offset would have a value of -1.
+
+  For example, if the following record is being inserted to the DBMS:
+
+  	Name: "Anteater", Age: NULL, Height: 177.8, Salary: NULL
+
+  Then the offsets will be 4, 12, -1, 16,  -1. The offset of the Name field is (4+1) * sizeof(short) + sizeof(int) + 8, as I also include the length of the string in the record. Following the directories is the exact data that is passed into insertRecord(), without further re-formatting.
+
+  The field can be accessed in O(1) time as the program can directly index into the field offsets, get the offset of the end of this record, as well as the head (i.e. the end of the last not-NULL record before it), thus the length of the field, which are basically all we need to access the data of a field.
+
+  ===== above are just identical to my record format in project 1 and below is a new feature =====
+
+  To implement adding and dropping attributes, in addition to the number of fields and the offset of each field, I also record the version of schema that this record is following. The version is recorded right after the number of fields, as we need to retrieve the old schema so as to parse the following offsets and also the real data. Thus the total number of offset variables will now be (n+2).
+
+
 - Describe how you store a VarChar field.
+
+  As described in the previous subsection, a VarChar field in my DBMS is represented as a 4-byte int representing its length, and the exact value of it. 
 
 
 4. Page Format
 - Show your page format design.
 
+  My page format design basically follows the page format for variable length records introduced in lectures. A 4096-byte page is splitted into three parts: 1) record data, 2) free space, and 3) slot directory.
+
+  1) Record data: the first part of the page is compacted record data. Each record is encoded into the internal record format illustrated in the previous section, and stored in this part one after another. There is no free block in this part, that is, a record is always located right after the previous one.
+
+  2) Free space: a continuous free space that can be used to store future records.
+
+  3) Slot directory: a directory with each element in it encoding the information about the slot and corresponding record, and last two extra elements representing the number of slots and the size of free space in the space. The information includes a) whether the slot is actually empty/invalid (i.e. deleted previously and can be reuse), b) whether the slot is a forwarding pointer to and the slot in another page it's pointing to, and, c) if the slot is "normal" (not empty, not forwarding), the offset of the beginning of corresponding record, relative to the page. Each element is an unsigned int thus has 32 bits. The first 20 bits are used to encode the PID of the record, and the remaining 12 bits are used to represent the offset.
+    a) When the slot is said to be "normal", then everything goes normally: the 20 bits represent the PID, and the following 12 bits represent the relative location of the start of the corresponding record.
+    b) When the slot is empty, the PID is still that of the current page, yet the following 12 bits will have a value of 0xfff (4095), which could by no mean be a valid offset (remember that there are always two unsigned int values at the end of the page representing number of slots and free space size).
+    c) When the slot is a forwarding pointer that points to another slot in another page, which could be a case when the original record was updated to be longer than what the current page could offer and thus was placed to another page, the PID will be that of the other page, and the following 12 bits will encode the "actual" SID where the data resides.
+
+    ===== above are just identical to my page format in project 1 and below is a new feature =====
+
+    d) When the slot is forwarded from another slot, then the first 20 bits will have a value of 0xfffff (1048575), the max unsigned value that can be encoded in 20 bits, to indicate that this slot is "private" and cannot be accessed or modified directly by public APIs.
+
+  This page format then brings a maximum limitation of number of pages -- there could be at most 1048574 pages, i.e. the file for a single table should not exceed ~4.3GB.
+
 
 5. File Format
 - Show your file format design
+  
+  For each file, the first internal page is used to store the three read/write/append counters. Following pages will be used to store exact data.
+
+  Besides from this, I also use several extra pages at the end of the file to store the size of free space for each page. The intention is that, when the program is going to seek a page with enough space during insertion or update, it's going to iterate the existing pages, load each of them entirely, and decode the size of free space from the end of a page. This operation is IO-intensive yet not efficient, as all we want is only the last 4 bytes of the whole 4096-byte page. Thus I try to write the information of free space collectively into the end of the file in addition to the end of each corresponding page, and it turns out to have a great speedup.
 
 
 6. Describe the following operation logic.
 - Update a record
 
+  1) Firstly, the new data to be updated will be serialized into record format in my DBMS, and we will also get the size of the serialized record.
+
+  2) Then, the program loads the page specified in the RID, seeks the record slot, then checks if the slot is redirecting to another page. If so, then it will decode and retrieve the page and slot that is actually in charge of this record, and reload to the new page.
+
+  3) After locating to the right place, it checks whether the current page has enough space for the update. Say delta = size of new data - size of old data:
+
+    3a) If the current page has enough space, then all we need is to shift the continuous chunk of records locating behind that record in this page forward/backward by delta, meanwhile update the offset of those records by delta, and everything is done.
+
+    3b) If current page is not capable for the new record, then we will scan all pages in the current file and find the first page that has enough empty space (size of new record + size of record offset), write record to the new page (and add a new slot at the end of the new page), mark this new slot to be "private" (see 4.3.d), encode information of the new forwarded slot into the old slot (see 4.3.c), and delete the old record from file. Note that there could be a tricky case: say the record specified by RID <1,2> has already been forwarded to slot 3 at page 3, and we want to update it again. Between the first update and this upcoming update there are some deletions in page 1 and some insertion into page 3, making page 1 now actually capable for a large record but page 3 fairly full. Now when finding the new page to place the new record, the program will actually redirect back to page 1. In this case, I just write the new data into page 1, re-use the slot 2 in page 1 to point to it, which means that this record (or say slot) is "normal" again, no more forwarding to another slot, and slot 3 at page 3 will be marked as an empty slot ready for future update or insertion.
+
 - Delete a record
+
+  Firstly, the program will load the page specified by the given RID, locate the slot, and check whether the corresponding record has forwarded to another slot in another page. If not, all needs to be done is to shift records after the specified record backward (or in other words, shift to "left" side), decrement the offset by the size of record to be deleted, and mark the slot corresponding to RID as "empty" for future use. If it's a forwarding slot, then the only extra thing to do is redirection, and marking both the origin and the forwarded slots to be "empty".
 
 - Scan
 
+  Before each scan operation in RM, an RM_ScanIterator (RMSI) object will be created. In each RMSI I assign a private fileHandle that is designated for this scan operation, as well as an RBFM_ScanIterator (RBFMSI). In rm.scan(), the corresponding table file will be opened by RBFM via the private fileHandle, then the fileHandle, along with all scan parameters, will be passed into the RMSI as an initialization. In other words, the job of rm.scan() is just to initalize the RMSI.
+
+  The RMSI object has two variables that record current page id and slot id respectively. When getNextRecord() is called, the RMSI will update these pointer to the first candidate record ready to be read, no matter whether this record satisfies the condition or not. Then the corresponding page is loaded, and the status of the upcoming record will be examined. If the record is deleted or "private", we just go back and find the next record. If the record redirects to another page, then the new page will be loaded. Then the actual record data will be read and checked if it satisfies the condition. If condition is not satisfied, nothing will be written into the input data buffer (void *data) in the read step, the program goes back to find the next record; Else a success RC will be returned. The getNextRecord() will return EOF when the current page id pointer is updated to be larger or equal to the total number of pages.
+
 
 7. Implementation Detail
-- Other implementation details goes here.
+
+  As mentioned in project 1 report, I abstract each page as a Page object. Each page object has some in-memory variables providing basic information about itself such as size of free space, PID, its record offsets, plus a 4096-byte buffer to store its acutal data. The buffer will be empty most of the time except there are some read/write operations on this page which requires dumping data on disk into in-memory buffer. Since in project 2 the relationship between FileHandle and an actual file (i.e. a table) is one-on-one, while the relationship between file (FileHandle) and page is one-to-many, I refactor the whole design and let FileHandle instead of rbfm to take charge of the vector of Page objects. 
+
+  In RelationManager, I define table-to-id, table-to-file, and table-to-schemas hashmaps that store the table and column information in-memory. The program will parse from Tables and Columns catalogs to initialize these variables when needed (basically when a new script is executed) so we won't bother always reading from catalogs before each table/record operation. To implement the extra credit features, instead of directly mapping a table to a vector of its attributes, I map a table to a vector of all versions of attributes, i.e. it's a map from table name to std::vector<std::vector<Attribute>>, so the readRecord() and readAttribute() functions can get access to the old version of schema that a record follows as well as the latest "global" schema. It would be better in terms of memory usage if I could use some incremental method to store information about schema of different versions instead of using such kind of a brute-force method.
+
+  
 
 
 8. Other (optional)
