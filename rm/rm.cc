@@ -32,8 +32,13 @@ RelationManager::RelationManager(const RelationManager &) = default;
 RelationManager &RelationManager::operator=(const RelationManager &) = default;
 
 RC RelationManager::createCatalog() {
+  remove("Tables.catalog");
+  remove("Columns.catalog");
   loadDbIfExist();
-  if (ifDBExists()) return -1;
+  if (ifDBExists()) {
+    std::cout << "db exists" <<  std::endl;
+    return -1;
+  }
 
   rbfm_->createFile(getTableFileName(TABLE_CATALOG_NAME_, true));
   rbfm_->createFile(getTableFileName(COLUMN_CATALOG_NAME_, true));
