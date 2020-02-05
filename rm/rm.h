@@ -136,7 +136,7 @@ bool RelationManager::ifTableExists(const std::string &tableName) {
 }
 
 std::string RelationManager::getTableFileName(const std::string &tableName, bool is_system_table) {
-  return is_system_table ? tableName + ".ctlg" : tableName;
+  return is_system_table ? tableName + ".catalog" : tableName;
 }
 
 void RelationManager::loadDbIfExist() {
