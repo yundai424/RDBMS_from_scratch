@@ -1,3 +1,4 @@
+#include <sys/stat.h>
 #include "rm.h"
 
 const int RelationManager::SYSTEM_FLAG = 1;
@@ -32,6 +33,7 @@ RelationManager::RelationManager(const RelationManager &) = default;
 RelationManager &RelationManager::operator=(const RelationManager &) = default;
 
 RC RelationManager::createCatalog() {
+  mkdir("../files", S_IRUSR | S_IWUSR | S_IXUSR);
   loadDbIfExist();
   if (ifDBExists()) {
     return -1;
