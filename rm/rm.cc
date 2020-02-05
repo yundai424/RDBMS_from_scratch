@@ -32,10 +32,8 @@ RelationManager::RelationManager(const RelationManager &) = default;
 RelationManager &RelationManager::operator=(const RelationManager &) = default;
 
 RC RelationManager::createCatalog() {
-  std::cout <<  "create catalog..." << std::endl;
   loadDbIfExist();
   if (ifDBExists()) {
-    std::cout << "db exists" <<  std::endl;
     return -1;
   }
 
