@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <functional>
 #include <unordered_map>
+#include <algorithm>
 
 typedef unsigned short SID; // slod it
 typedef unsigned PID; // page id
