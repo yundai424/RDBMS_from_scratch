@@ -314,14 +314,12 @@ RC RelationManager::createTableImpl(const std::string &tableName,
   if (!ver) {
     // only create table at version 0
     auto table_data = makeTableRecord(tableName, is_system_table);
-//  rbfm_->printRecord(TABLE_CATALOG_DESC_, table_data.data());
     RID tbl_id;
     if (insertTupleImpl(TABLE_CATALOG_NAME_, table_data.data(), tbl_id, true) != 0) return -1;
   }
 
   for (int i = 0; i < attrs.size(); ++i) {
     auto column_data = makeColumnRecord(tableName, i, ver, attrs[i]);
-//    rbfm_->printRecord(COLUMN_CATALOG_DESC_, column_data.data());
     RID col_id;
     if (insertTupleImpl(COLUMN_CATALOG_NAME_, column_data.data(), col_id, true) != 0) return -1;
   }

@@ -95,8 +95,11 @@ Student 2 Name (if applicable):
 
   In RelationManager, I define table-to-id, table-to-file, and table-to-schemas hashmaps that store the table and column information in-memory. The program will parse from Tables and Columns catalogs to initialize these variables when needed (basically when a new script is executed) so we won't bother always reading from catalogs before each table/record operation. To implement the extra credit features, instead of directly mapping a table to a vector of its attributes, I map a table to a vector of all versions of attributes, i.e. it's a map from table name to std::vector<std::vector<Attribute>>, so the readRecord() and readAttribute() functions can get access to the old version of schema that a record follows as well as the latest "global" schema. It would be better in terms of memory usage if I could use some incremental method to store information about schema of different versions instead of using such kind of a brute-force method.
 
-  
-
 
 8. Other (optional)
-- Freely use this section to tell us about things that are related to the project 2, but not related to the other sections (optional)           
+- Freely use this section to tell us about things that are related to the project 2, but not related to the other sections (optional)   
+
+I have attached the screenshots for gdb and valgrind in the root directory. Note that according to valgrind there are always 72,704 bytes still reachable, and the number of malloc's is always 1 larger than number of free's. Sometimes there will be an error stating "Syscall param points to uninialized byte(s)". I run valgrind on all test cases including rbftest and this phenomenon is always there. I searched on StackOverflow, and it turns out to be like a minor problem of gcc:
+
+https://stackoverflow.com/questions/5844242/valgrind-yells-about-an-uninitialised-bytes
+https://stackoverflow.com/questions/31775034/valgrind-error-in-use-at-exit-72-704-bytes-c-initialization-list-weirdness-w
