@@ -1,0 +1,37 @@
+1. Basic information
+Team #:
+Github Repo Link:
+Student 1 UCI NetID:
+Student 1 Name:
+Student 2 UCI NetID (if applicable):
+Student 2 Name (if applicable):
+
+
+2. Meta-data page in an index file
+- Show your meta-data page of an index design if you have any. 
+
+
+3. Index Entry Format
+- Show your index entry design (structure). 
+
+
+4. Page Format
+- Show your internal-page (non-leaf node) design.
+
+- Show your leaf-page (leaf node) design.
+
+
+5. Implementation Detail
+- Have you added your own source file (.cc or .h)?
+
+- Have you implemented non-lazy deletion? Choose Yes or No: 
+
+- Have you implemented duplicated key handling that can span multiple pages? Choose Yes or No: 
+  If yes, please explain briefly how you have implemented this feature.
+
+- Other implementation details:
+
+
+6. Other (optional)
+- Freely use this section to tell us about things that are related to the project 3, but not related to the other sections (optional)
+
