@@ -447,6 +447,9 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<std::vector<Attri
       if (!cmpAttr(cmp, data_schema[cond_field_idx].type, src + cond_field_start, cond_value)) {
         return COND_NOT_SATISFIED;
       }
+    } else {
+      DB_ERROR << "condition attr `" << cond_field << "` not found on current schema!";
+      return -1;
     }
   }
 
@@ -536,25 +539,31 @@ bool RecordBasedFileManager::cmpAttr(CompOp cmp,
       {CompOp::GT_OP, std::greater<float>()},
       {CompOp::GE_OP, std::greater_equal<float>()},
   };
-  static const std::unordered_map<CompOp, std::function<bool(const char *, const char *)>, EnumHash> char_op_map{
-      {CompOp::EQ_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) == 0; }},
-      {CompOp::NE_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) != 0; }},
-      {CompOp::LT_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) < 0; }},
-      {CompOp::LE_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) <= 0; }},
-      {CompOp::GT_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) > 0; }},
-      {CompOp::GE_OP, [](const char *s1, const char *s2) { return strcmp(s1, s2) >= 0; }},
+  static const std::unordered_map<CompOp, std::function<bool(const char *, const char *, int, int)>, EnumHash>
+      char_op_map{
+      {CompOp::EQ_OP, [](const char *s1, const char *s2, int l1, int l2) { return myStrcmp(s1, s2, l1, l2) == 0; }},
+      {CompOp::NE_OP, [](const char *s1, const char *s2, int l1, int l2) { return myStrcmp(s1, s2, l1, l2) != 0; }},
+      {CompOp::LT_OP, [](const char *s1, const char *s2, int l1, int l2) { return myStrcmp(s1, s2, l1, l2) < 0; }},
+      {CompOp::LE_OP, [](const char *s1, const char *s2, int l1, int l2) { return myStrcmp(s1, s2, l1, l2) <= 0; }},
+      {CompOp::GT_OP, [](const char *s1, const char *s2, int l1, int l2) { return myStrcmp(s1, s2, l1, l2) > 0; }},
+      {CompOp::GE_OP, [](const char *s1, const char *s2, int l1, int l2) { return myStrcmp(s1, s2, l1, l2) >= 0; }},
   };
 
   if (type == AttrType::TypeInt) {
-
     return int_op_map.at(cmp)(*static_cast<const int *>(val1), *static_cast<const int *>(val2));
   } else if (type == AttrType::TypeReal) {
     return float_op_map.at(cmp)(*static_cast<const float *>(val1), *static_cast<const float *>(val2));
+  } else if (type == AttrType::TypeVarChar) {
+    int l1 = *((const int *) val1), l2 = *((const int *) val2);
+
+    return char_op_map.at(cmp)(static_cast<const char *>(val1) + sizeof(int),
+                               static_cast<const char *>(val2) + sizeof(int),
+                               l1,
+                               l2);
   } else {
-    return char_op_map.at(cmp)(static_cast<const char *>(val1), static_cast<const char *>(val2));
+    DB_ERROR << "Unrecognized AttrType " << type;
+    return false;
   }
-  DB_ERROR << "Unrecognized AttrType " << type;
-  return false;
 }
 
 /**************************************
@@ -797,6 +806,10 @@ RC RBFM_ScanIterator::init(FileHandle &fileHandle,
                            CompOp compOp,
                            const void *value,
                            const std::vector<std::string> &attributeNames) {
+  if (attributeNames.empty()) {
+    DB_ERROR << "attibuteNames can not be emtpy!";
+    return -1;
+  }
   init_ = true;
   rbfm_ = rbfm;
   file_handle_ = &fileHandle;
