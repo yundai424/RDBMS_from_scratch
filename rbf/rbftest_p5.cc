@@ -37,13 +37,13 @@ int RBFTest_private_5(RecordBasedFileManager &rbfm) {
     RID tempRID, tempRID2;
 
     // Read rids from the disk - do not use this code. This is not a page-based operation. For test purpose only.
-    ifstream ridsFileRead("test_private_4a_rids", ios::in | ios::binary);
+    std::ifstream ridsFileRead("test_private_4a_rids", std::ios::in | std::ios::binary);
 
     unsigned pageNum;
     unsigned slotNum;
 
     if (ridsFileRead.is_open()) {
-        ridsFileRead.seekg(0, ios::beg);
+        ridsFileRead.seekg(0, std::ios::beg);
         for (unsigned i = 0; i < numRecords; i++) {
             ridsFileRead.read(reinterpret_cast<char *>(&pageNum), sizeof(unsigned));
             ridsFileRead.read(reinterpret_cast<char *>(&slotNum), sizeof(unsigned));
@@ -115,10 +115,10 @@ int RBFTest_private_5(RecordBasedFileManager &rbfm) {
     memset(nullsIndicator2, 0, nullFieldsIndicatorActualSize2);
 
     // Read rids from the disk - do not use this code. This is not a page-based operation. For test purpose only.
-    ifstream ridsFileRead2("test_private_4b_rids", ios::in | ios::binary);
+    std::ifstream ridsFileRead2("test_private_4b_rids", std::ios::in | std::ios::binary);
 
     if (ridsFileRead2.is_open()) {
-        ridsFileRead2.seekg(0, ios::beg);
+        ridsFileRead2.seekg(0, std::ios::beg);
         for (unsigned i = 0; i < numRecords; i++) {
             ridsFileRead2.read(reinterpret_cast<char *>(&pageNum), sizeof(unsigned));
             ridsFileRead2.read(reinterpret_cast<char *>(&slotNum), sizeof(unsigned));

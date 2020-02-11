@@ -142,10 +142,10 @@ int RBFTest_private_4(RecordBasedFileManager &rbfm) {
     }
 
     // Write RIDs of test_private_4a to a disk - do not use this code. This is not a page-based operation. For test purpose only.
-    ofstream ridsFile("test_private_4a_rids", ios::out | ios::trunc | ios::binary);
+    std::ofstream ridsFile("test_private_4a_rids", std::ios::out | std::ios::trunc | std::ios::binary);
 
     if (ridsFile.is_open()) {
-        ridsFile.seekp(0, ios::beg);
+        ridsFile.seekp(0, std::ios::beg);
         for (int i = 0; i < numRecords; i++) {
             ridsFile.write(reinterpret_cast<const char *>(&rids.at(i).pageNum), sizeof(unsigned));
             ridsFile.write(reinterpret_cast<const char *>(&rids.at(i).slotNum), sizeof(unsigned));
@@ -155,10 +155,10 @@ int RBFTest_private_4(RecordBasedFileManager &rbfm) {
     }
 
     // Write RIDs of test_private_4b to a disk - do not use this code. This is not a page-based operation. For test purpose only.
-    ofstream ridsFile2("test_private_4b_rids", ios::out | ios::trunc | ios::binary);
+    std::ofstream ridsFile2("test_private_4b_rids", std::ios::out | std::ios::trunc | std::ios::binary);
 
     if (ridsFile2.is_open()) {
-        ridsFile2.seekp(0, ios::beg);
+        ridsFile2.seekp(0, std::ios::beg);
         for (int i = 0; i < numRecords; i++) {
             ridsFile2.write(reinterpret_cast<const char *>(&rids2.at(i).pageNum), sizeof(unsigned));
             ridsFile2.write(reinterpret_cast<const char *>(&rids2.at(i).slotNum), sizeof(unsigned));
