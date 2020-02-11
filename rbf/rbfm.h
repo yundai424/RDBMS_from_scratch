@@ -423,6 +423,12 @@ class RecordBasedFileManager {
    */
   std::pair<bool, Page *> loadPageWithRid(const RID &rid, FileHandle &file_handle);
 
+  static int inline myStrcmp(const char *s1, const char *s2, int l1, int l2) {
+    int min_l = std::min(l1, l2);
+    int ret = strncmp(s1, s2, min_l);
+    return ret == 0 ? l1 - l2 : ret;
+  }
+
  public:
 
   /**
