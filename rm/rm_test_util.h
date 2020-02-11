@@ -690,13 +690,13 @@ void prepareTweetTupleAfterAdd(int attributeCount, unsigned char *nullAttributes
 
 // Write UserIDs to a disk - do not use this code.
 //This is not a page-based operation. For test purpose only.
-void writeUserIdsToDisk(set<int> &userIds) {
-    set<int>::iterator it;
+void writeUserIdsToDisk(std::set<int> &userIds) {
+    std::set<int>::iterator it;
     remove("user_ids_file");
-    ofstream user_idsFile("user_ids_file", ios::out | ios::trunc | ios::binary);
+    std::ofstream user_idsFile("user_ids_file", std::ios::out | std::ios::trunc | std::ios::binary);
 
     if (user_idsFile.is_open()) {
-        user_idsFile.seekp(0, ios::beg);
+        user_idsFile.seekp(0, std::ios::beg);
         for (it = userIds.begin(); it != userIds.end(); ++it) {
             user_idsFile.write(reinterpret_cast<const char *>(&*it), sizeof(int));
         }
@@ -706,13 +706,13 @@ void writeUserIdsToDisk(set<int> &userIds) {
 
 // Read ages from the disk - do not use this code.
 //This is not a page-based operation. For test purpose only.
-void readUserIdsFromDisk(set<int> &userids, int numRecords) {
+void readUserIdsFromDisk(std::set<int> &userids, int numRecords) {
     int userid;
 
-    ifstream user_idsFile("user_ids_file", ios::in | ios::binary);
+    std::ifstream user_idsFile("user_ids_file", std::ios::in | std::ios::binary);
     if (user_idsFile.is_open()) {
 
-        user_idsFile.seekg(0, ios::beg);
+        user_idsFile.seekg(0, std::ios::beg);
         for (int i = 0; i < numRecords; i++) {
             user_idsFile.read(reinterpret_cast<char *>(&userid), sizeof(int));
             userids.insert(userid);
