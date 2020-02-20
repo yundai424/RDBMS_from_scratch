@@ -192,13 +192,3 @@ RC FileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePage
   appendPageCount = appendPageCounter;
   return 0;
 }
-
-RC FileHandle::writeRecord(size_t pos, const void *record, unsigned size) {
-  if (!_file.is_open()) {
-//    DB_WARNING << "File is not opened!";
-    return -1;
-  }
-  _file.seekp(pos);
-  _file.write((char *) record, size);
-  return 0;
-}
