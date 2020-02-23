@@ -129,14 +129,13 @@ class IXFileHandle {
  *
  * each tree node start with a meta page, followed by several data page
  * ******************************************************************
- * tree meta page: (which will always be the first page
+ * 0. `tree meta page` (which will always be the first page
  * int root_page : node meta page num for root, -1 if tree empty
  * ******************************************************************
- * node meta page:
+ * 1. `node meta page`
  * int page_type : 0 -> meta page, 1 -> data page
  * int key_type : 0 -> int, 1 -> float, 2 -> varchar
  * int is_leaf : 0 -> leaf, 1 -> non-leaf
- * int left_pid : -1 means null
  * int right_pid : -1 means null
  * int M : order of tree
  * int m : current entry number, in range [M, 2M]
@@ -144,15 +143,20 @@ class IXFileHandle {
  * (2 * M + 1) * int : children meta page
  *
  * ******************************************************************
- * data page:
+ * 2. `data page`
  * int page_type : 0 -> meta page, 1 -> data page
+ * following data...
  *
  */
 
 struct IXPage {
 
+  /*
+   * for `data page`
+   */
   static const size_t MAX_DATA_SIZE;
   static const size_t DEFAULT_DATA_END;
+
   char *data;
 
   bool meta;
@@ -184,9 +188,13 @@ struct Key {
 
   unsigned page_num;
   unsigned slot_num;
+
   Key(AttrType key_type_, const char *key_val, RID rid);
 
   Key(AttrType key_tpye_, const char *src); // deserialize from binary
+
+  int getSize() const;
+
   void serialize(char *dst) const; // serialize to binary
 
   std::string ToString() const;
@@ -204,6 +212,16 @@ class Node {
 
   IXPage *meta_page;
   std::vector<IXPage *> data_pages;
+  bool modified;
+
+  /*
+   * set ctor to private
+   * construct node using static function instead to avoid confusion.
+   * either construct an empty node in memory, and associate it with a page or construct from disk
+   */
+  Node(BPlusTree *tree_ptr, IXPage *meta_p);
+
+  RC loadFromPage();
 
  public:
   typedef std::pair<Key, std::shared_ptr<Data>> data_t; // for index node, Data will be nullptr
@@ -218,24 +236,27 @@ class Node {
   Node *getChild(int idx);
   void setRight(int pid);
 
-  // construct an empty node in memory, and associate it with a page
-  Node(BPlusTree *tree_ptr, IXPage *meta_p, bool is_leaf);
-  // construct from disk
-  Node(BPlusTree *tree_ptr, IXPage *meta_p);
+  RC dumpToPage();
 
   std::string toString() const;
+
+  static std::shared_ptr<Node> createNode(BPlusTree *tree_ptr, IXPage *meta_p, bool is_leaf);
+
+  static std::shared_ptr<Node> loadNodeFromPage(BPlusTree *tree_ptr, IXPage *meta_p);
 
 };
 
 class BPlusTree {
   friend class Node;
  private:
-  const static int ROOT_PID;
+  const static int TREE_META_PID;
 //  std::vector<std::shared_ptr<Node>> nodes;
   std::unordered_map<int, std::shared_ptr<Node>> nodes_;
   Node *root_;
   IXFileHandle *file_handle_;
   AttrType key_type;
+  bool modified;
+  int M; // order, # of key should be in range [M, 2M], and # of children should be [M+1, 2M+1]
 
 /**
    * DFS helper function to search for key using binary search
@@ -246,11 +267,18 @@ class BPlusTree {
    */
   std::pair<int, bool> search(Key key, std::vector<std::pair<Node *, int>> &path);
 
+  /*
+   * set ctor to private
+   * use static function to create from memory or load from file
+   */
+  BPlusTree(IXFileHandle &file_handle);
+
+  RC loadFromFile();
+
  public:
-  int M; // order, # of key should be in range [M, 2M], and # of children should be [M+1, 2M+1]
-  int MAX_ENTRY;
-  BPlusTree(int order, IXFileHandle &file_handle);
-  BPlusTree(IXFileHandle &file_handle); // load from a file
+
+  int inline MAX_ENTRY() const;
+
   RC insert(const Key &key, std::shared_ptr<Data> data);
   bool erase(const Key &key);
   bool find(const Key &key);
@@ -259,9 +287,20 @@ class BPlusTree {
   std::pair<RC, Node *> createNode(bool leaf);
   std::pair<RC, Node *> getNode(int pid);
 
+  RC dumpToFile();
+
+  static std::shared_ptr<BPlusTree> createTree(IXFileHandle &file_handle, int order, AttrType key_type);
+  static std::shared_ptr<BPlusTree> loadTreeFromFile(IXFileHandle &file_handle);
+
+
+
   void printEntries() const;
   void printTree() const;
 
 };
+
+int inline BPlusTree::MAX_ENTRY() const {
+  return M * 2;
+}
 
 #endif

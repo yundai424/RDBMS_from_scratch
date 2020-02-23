@@ -1,4 +1,5 @@
 #include <sstream>
+#include <set>
 
 #include "ix.h"
 
@@ -280,6 +281,17 @@ Key::Key(AttrType key_tpye_, const char *src) : key_type(key_tpye_) {
   slot_num = *((const int *) src);
 }
 
+int Key::getSize() const {
+  switch (key_type) {
+    case AttrType::TypeInt:return sizeof(int);
+
+    case AttrType::TypeReal:return sizeof(float);
+
+    case AttrType::TypeVarChar:return sizeof(int) + s.size();
+  }
+  return -1;
+}
+
 void Key::serialize(char *dst) const {
   switch (key_type) {
     case AttrType::TypeInt:memcpy(dst, &i, sizeof(int));
@@ -353,50 +365,135 @@ void Node::setRight(int pid) {
   right_pid = pid;
 }
 
-Node::Node(BPlusTree *tree_ptr, IXPage *meta_p, bool is_leaf)
-    : btree(tree_ptr), meta_page(meta_p), pid(meta_p->pid), leaf(is_leaf) {
+Node::Node(BPlusTree *tree_ptr, IXPage *meta_p) : btree(tree_ptr), meta_page(meta_p), pid(meta_p->pid), modified(true) {
 
 }
 
-Node::Node(BPlusTree *tree_ptr, IXPage *meta_p) : btree(tree_ptr), meta_page(meta_p), pid(meta_p->pid) {
-  /*
-   * ******************************************************************
-   * meta page:
+RC Node::loadFromPage() {
+  /*******************************************************************
+   * 1. `node meta page`
    * int page_type : 0 -> meta page, 1 -> data page
    * int key_type : 0 -> int, 1 -> float, 2 -> varchar
-   * int is_leaf : 0 -> non-leaf, 1 -> leaf
+   * int is_leaf : 0 -> leaf, 1 -> non-leaf
    * int right_pid : -1 means null
    * int M : order of tree
-   * int m : current entry number, in range [M, 2M], which means current children number will be m + 1
+   * int m : current entry number, in range [M, 2M]
    * 2 * M * (int + int + int) : position of keys <PID, offset, size>
    * (2 * M + 1) * int : children meta page
    *
    * ******************************************************************
+   * 2. `data page`
+   * int page_type : 0 -> meta page, 1 -> data page
+   * following data...
+   *
    */
   int *pt = (int *) meta_page->data;
   ++pt;
   int key_type_val = *pt++;
-  if (key_type_val > 2) throw std::runtime_error("unrecognized key type " + std::to_string(key_type_val));
+  if (key_type_val > 2) {
+    DB_WARNING << "unrecognized key type " << std::to_string(key_type_val);
+    return -1;
+  }
   btree->key_type = static_cast<AttrType>(key_type_val);
   leaf = (*pt++) == 1;
   right_pid = *pt++;
   btree->M = *pt++;
   int m = *pt++;
   entries.clear();
+  // load data entries
   int page_id, offset, size;
+  std::set<IXPage *> data_pages_set;
   for (int i = 0; i < m; ++i) {
     page_id = *(pt + i * 3 + 0);
     offset = *(pt + i * 3 + 1);
     size = *(pt + i * 3 + 2);
-    IXPage *page = btree->file_handle_->getPage(page_id).second;
+    auto ret = btree->file_handle_->getPage(page_id);
+    if (ret.first) return -1;
+    IXPage *page = ret.second;
+    data_pages_set.insert(page);
     entries.emplace_back(Key(btree->key_type, page->data + offset), std::make_shared<Data>(0));
   }
+  data_pages = {data_pages_set.begin(), data_pages_set.end()};
+  // load children pids
   pt += 2 * btree->M * 3;
   if (leaf) {
+    children_pids.clear();
     for (int i = 0; i < m + 1; ++i) {
       children_pids.emplace_back(*pt++);
     }
   }
+  return 0;
+}
+
+std::shared_ptr<Node> Node::createNode(BPlusTree *tree_ptr, IXPage *meta_p, bool is_leaf) {
+  auto node = std::make_shared<Node>(tree_ptr, meta_p);
+  node->leaf = is_leaf;
+  node->modified = true;
+  return node;
+}
+
+std::shared_ptr<Node> Node::loadNodeFromPage(BPlusTree *tree_ptr, IXPage *meta_p) {
+  auto node = std::make_shared<Node>(tree_ptr, meta_p);
+  if (node->loadFromPage()) return nullptr;
+  node->modified = false;
+  return node;
+}
+
+RC Node::dumpToPage() {
+  if (!modified) return 0;
+  // write data page
+  int cur_page_idx = 0;
+  int free_space = 0;
+  int offset = -1;
+  char *data_pt = nullptr;
+
+  std::vector<std::tuple<int, int, int>> entry_pos; // pid, offset, size
+
+  for (auto &entry : entries) {
+    int entry_size = entry.first.getSize();
+    if (entry_size > free_space) {
+      // new page
+      if (cur_page_idx == data_pages.size()) {
+        auto ret = btree->file_handle_->requestNewPage();
+        if (ret.first) return -1;
+        data_pages.emplace_back(ret.second);
+      }
+      IXPage *next_page = data_pages[cur_page_idx++];
+      data_pt = next_page->data;
+      *((int *) data_pt) = 1; // type1 `data page`
+      data_pt += sizeof(int);
+      free_space = IXPage::MAX_DATA_SIZE;
+    }
+    entry.first.serialize(data_pt);
+    data_pt += entry_size;
+    free_space -= entry_size;
+    entry_pos.emplace_back(data_pages[cur_page_idx]->pid, offset, entry_size);
+    offset += entry_size;
+  }
+  // write meta page
+
+  /*******************************************************************
+   * 1. `node meta page`
+   * int page_type : 0 -> meta page, 1 -> data page
+   * int key_type : 0 -> int, 1 -> float, 2 -> varchar
+   * int is_leaf : 0 -> leaf, 1 -> non-leaf
+   * int right_pid : -1 means null
+   * int M : order of tree
+   * int m : current entry number, in range [M, 2M]
+   * 2 * M * (int + int + int) : position of keys <PID, offset, size>
+   * (2 * M + 1) * int : children meta page
+   *
+   * ******************************************************************
+   * 2. `data page`
+   * int page_type : 0 -> meta page, 1 -> data page
+   * following data...
+   *
+   */
+  int *pt = (int *) meta_page->data;
+  *pt++ = 0; // type0 `meta page`
+  *pt++ =
+
+  return 0;
 }
 
 std::string Node::toString() const {
@@ -410,15 +507,60 @@ std::string Node::toString() const {
   return oss.str();
 }
 
-const int BPlusTree::ROOT_PID = 0;
+const int BPlusTree::TREE_META_PID = 0;
 
-BPlusTree::BPlusTree(int order, IXFileHandle &file_handle)
-    : file_handle_(&file_handle), M(order), MAX_ENTRY(order * 2) {}
+BPlusTree::BPlusTree(IXFileHandle &file_handle) : file_handle_(&file_handle), modified(true) {}
 
-BPlusTree::BPlusTree(IXFileHandle &file_handle) : file_handle_(&file_handle) {
-  // load from file
-  file_handle_->getPage(ROOT_PID);
+RC BPlusTree::loadFromFile() {
+  nodes_.clear();
+  modified = false;
+  auto ret = file_handle_->getPage(TREE_META_PID);
+  if (ret.first) {
+    DB_WARNING << "failed to load B+tree from file";
+    return -1;
+  }
+  IXPage *tree_meta_page = ret.second;
+  int *pt = (int *) tree_meta_page->data + IXPage::DEFAULT_DATA_END;
+  int root_pid = *pt++;
+  int key_type_val = *pt++;
+  if (key_type_val > 2) {
+    DB_WARNING << "unrecognized key type " << std::to_string(key_type_val);
+    return -1;
+  }
+  key_type = static_cast<AttrType>(key_type_val);
+  M = *pt++;
+  auto ret2 = getNode(root_pid);
+  if (ret2.first) {
+    DB_WARNING << "failed to load root node";
+    return -1;
+  }
+  root_ = ret2.second;
+  return 0;
 }
+
+std::shared_ptr<BPlusTree> BPlusTree::createTree(IXFileHandle &file_handle, int order, AttrType key_type) {
+  auto tree = std::make_shared<BPlusTree>(file_handle);
+  tree->M = order;
+  if (!tree->nodes_.empty()) {
+    DB_WARNING << "Can not init a non-empty b+tree";
+    return nullptr;
+  }
+  tree->modified = true;
+  return tree;
+}
+
+std::shared_ptr<BPlusTree> BPlusTree::loadTreeFromFile(IXFileHandle &file_handle) {
+  auto tree = std::make_shared<BPlusTree>(file_handle);
+  if (!tree->loadFromFile()) return nullptr;
+  tree->modified = false;
+  return tree;
+}
+
+RC BPlusTree::dumpToFile() {
+  if (!modified) return 0;
+  // TODO
+}
+
 
 RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
   if (!root_) {
@@ -439,10 +581,10 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
   } else {
     // create key, insert to entry_idx
     node->entries.insert(node->entries.begin() + entry_idx, {key, data});
-    if (node->entries.size() > MAX_ENTRY) {
+    if (node->entries.size() > MAX_ENTRY()) {
       // split: [0,M], [M+1, 2M+1], and copy_up/push_up M+1 key to parent, recursively split up
       Node *cur_node = node;
-      while (cur_node->entries.size() > MAX_ENTRY) {
+      while (cur_node->entries.size() > MAX_ENTRY()) {
         idx_in_parent = path.back().second;
         path.pop_back();
         Node *parent = path.empty() ? nullptr : path.back().first;
@@ -591,13 +733,13 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
   // build leaf layer
   bool last = false;
   for (int i = 0; i < entries.size();) {
-    int j = std::min(i + MAX_ENTRY, int(entries.size()));
-    int step = MAX_ENTRY;
+    int j = std::min(i + MAX_ENTRY(), int(entries.size()));
+    int step = MAX_ENTRY();
     auto ret = createNode(true);
     if (ret.first) return -1;
     Node *new_node = ret.second;
     prev_layer.push_back(new_node);
-    if (!last && i + 2 * MAX_ENTRY >= entries.size() && i + MAX_ENTRY < entries.size()) {
+    if (!last && i + 2 * MAX_ENTRY() >= entries.size() && i + MAX_ENTRY() < entries.size()) {
       // last two bunch, we need to split average to avoid last node element < M
       step = (entries.size() - i) / 2;
       j = i + step;
@@ -620,14 +762,14 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
     // build cur layer using entries
     bool last = false;
     for (int i = 0; i < entries.size();) {
-      int j = std::min(i + MAX_ENTRY + 1, int(entries.size()));
-      int step = 1 + MAX_ENTRY;
+      int j = std::min(i + MAX_ENTRY() + 1, int(entries.size()));
+      int step = 1 + MAX_ENTRY();
       auto ret = createNode(false);
       if (!ret.first) return -1;
       Node *new_node = ret.second;
       cur_layer.push_back(new_node);
       // we will drop the first key, leaving MAX_ENTRY key and MAX_ENTRY + 1 children
-      if (!last && i + 2 * (MAX_ENTRY + 1) >= entries.size() && i + MAX_ENTRY + 1 < entries.size()) {
+      if (!last && i + 2 * (MAX_ENTRY() + 1) >= entries.size() && i + MAX_ENTRY() + 1 < entries.size()) {
         // last two bunch, we need to split average to avoid last node element < M
         step = (entries.size() - i) / 2;
         j = i + step;
@@ -701,7 +843,7 @@ std::pair<RC, Node *> BPlusTree::createNode(bool leaf) {
     return {-1, nullptr};
   }
   IXPage *new_page = ret.second;
-  std::shared_ptr<Node> new_node = std::make_shared<Node>(this, new_page, leaf);
+  std::shared_ptr<Node> new_node = Node::createNode(this, new_page, leaf);
   nodes_[new_page->pid] = new_node;
   return {0, new_node.get()};
 }
@@ -713,7 +855,7 @@ std::pair<RC, Node *> BPlusTree::getNode(int pid) {
       DB_WARNING << "failed to get page " << pid;
       return {-1, nullptr};
     }
-    nodes_[pid] = std::make_shared<Node>(this, ret.second);
+    nodes_[pid] = Node::loadNodeFromPage(this, ret.second);
   }
   return {0, nodes_[pid].get()};
 }
