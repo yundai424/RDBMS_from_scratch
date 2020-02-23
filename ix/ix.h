@@ -131,13 +131,13 @@ class IXFileHandle {
  * ******************************************************************
  * 0. `tree meta page` (which will always be the first page
  * int root_page : node meta page num for root, -1 if tree empty
+ * int key_type : 0 -> int, 1 -> float, 2 -> varchar
+ * int M : order of tree
  * ******************************************************************
  * 1. `node meta page`
  * int page_type : 0 -> meta page, 1 -> data page
- * int key_type : 0 -> int, 1 -> float, 2 -> varchar
- * int is_leaf : 0 -> leaf, 1 -> non-leaf
+ * int is_leaf : 0 -> non-leaf, 1 -> leaf
  * int right_pid : -1 means null
- * int M : order of tree
  * int m : current entry number, in range [M, 2M]
  * 2 * M * (int + int + int) : position of keys <PID, offset, size>
  * (2 * M + 1) * int : children meta page
@@ -206,6 +206,11 @@ struct Key {
 class BPlusTree;
 
 class Node {
+
+ public:
+  typedef std::pair<Key, std::shared_ptr<Data>> data_t; // for index node, Data will be nullptr
+
+ private:
   static const int INVALID_PID;
 
   BPlusTree *btree;
@@ -213,6 +218,11 @@ class Node {
   IXPage *meta_page;
   std::vector<IXPage *> data_pages;
   bool modified;
+  int pid;
+  bool leaf;
+  int right_pid = -1;
+  std::deque<int> children_pids;
+  std::deque<data_t> entries; // size = children.size() - 1
 
   /*
    * set ctor to private
@@ -222,19 +232,19 @@ class Node {
   Node(BPlusTree *tree_ptr, IXPage *meta_p);
 
   RC loadFromPage();
-
  public:
-  typedef std::pair<Key, std::shared_ptr<Data>> data_t; // for index node, Data will be nullptr
-  int pid;
-  bool leaf;
-  int right_pid;
-  std::deque<int> children_pids;
-  std::deque<data_t> entries; // size = children.size() - 1
-
-
+  // const
+  bool isLeaf() const;
+  int getPid() const;
+  int getRightPid() const;
   Node *getRight();
   Node *getChild(int idx);
-  void setRight(int pid);
+  const std::deque<int> &childrenPidsConst() const;
+  const std::deque<data_t> &entriesConst() const;
+  // non const, set modified to true
+  void setRightPid(int r_pid);
+  std::deque<int> &childrenPidsNonConst();
+  std::deque<data_t> &entriesNonConst();
 
   RC dumpToPage();
 
@@ -275,6 +285,10 @@ class BPlusTree {
 
   RC loadFromFile();
 
+  std::pair<RC, Node *> createNode(bool leaf);
+  std::pair<RC, Node *> getNode(int pid);
+  RC deleteNode(int pid);
+
  public:
 
   int inline MAX_ENTRY() const;
@@ -284,15 +298,10 @@ class BPlusTree {
   bool find(const Key &key);
   RC bulkLoad(std::vector<Node::data_t> entries);
 
-  std::pair<RC, Node *> createNode(bool leaf);
-  std::pair<RC, Node *> getNode(int pid);
-
   RC dumpToFile();
 
   static std::shared_ptr<BPlusTree> createTree(IXFileHandle &file_handle, int order, AttrType key_type);
   static std::shared_ptr<BPlusTree> loadTreeFromFile(IXFileHandle &file_handle);
-
-
 
   void printEntries() const;
   void printTree() const;

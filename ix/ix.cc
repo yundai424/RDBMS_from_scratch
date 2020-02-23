@@ -353,6 +353,17 @@ bool Key::operator==(const Key &rhs) const {
 
 const int Node::INVALID_PID = -1;
 
+bool Node::isLeaf() const {
+  return leaf;
+}
+int Node::getPid() const {
+  return pid;
+}
+
+int Node::getRightPid() const {
+  return right_pid;
+}
+
 Node *Node::getRight() {
   return right_pid == INVALID_PID ? nullptr : btree->getNode(right_pid).second;
 }
@@ -361,8 +372,27 @@ Node *Node::getChild(int idx) {
   return btree->getNode(children_pids[idx]).second;
 }
 
-void Node::setRight(int pid) {
-  right_pid = pid;
+void Node::setRightPid(int r_pid) {
+  modified = true;
+  right_pid = r_pid;
+}
+
+std::deque<int> &Node::childrenPidsNonConst() {
+  modified = true;
+  return children_pids;
+}
+
+const std::deque<int> &Node::childrenPidsConst() const {
+  return children_pids;
+}
+
+std::deque<Node::data_t> &Node::entriesNonConst() {
+  modified = true;
+  return entries;
+}
+
+const std::deque<Node::data_t> &Node::entriesConst() const {
+  return entries;
 }
 
 Node::Node(BPlusTree *tree_ptr, IXPage *meta_p) : btree(tree_ptr), meta_page(meta_p), pid(meta_p->pid), modified(true) {
@@ -373,10 +403,8 @@ RC Node::loadFromPage() {
   /*******************************************************************
    * 1. `node meta page`
    * int page_type : 0 -> meta page, 1 -> data page
-   * int key_type : 0 -> int, 1 -> float, 2 -> varchar
-   * int is_leaf : 0 -> leaf, 1 -> non-leaf
+   * int is_leaf : 0 -> non-leaf, 1 -> leaf
    * int right_pid : -1 means null
-   * int M : order of tree
    * int m : current entry number, in range [M, 2M]
    * 2 * M * (int + int + int) : position of keys <PID, offset, size>
    * (2 * M + 1) * int : children meta page
@@ -389,12 +417,6 @@ RC Node::loadFromPage() {
    */
   int *pt = (int *) meta_page->data;
   ++pt;
-  int key_type_val = *pt++;
-  if (key_type_val > 2) {
-    DB_WARNING << "unrecognized key type " << std::to_string(key_type_val);
-    return -1;
-  }
-  btree->key_type = static_cast<AttrType>(key_type_val);
   leaf = (*pt++) == 1;
   right_pid = *pt++;
   btree->M = *pt++;
@@ -475,10 +497,8 @@ RC Node::dumpToPage() {
   /*******************************************************************
    * 1. `node meta page`
    * int page_type : 0 -> meta page, 1 -> data page
-   * int key_type : 0 -> int, 1 -> float, 2 -> varchar
-   * int is_leaf : 0 -> leaf, 1 -> non-leaf
+   * int is_leaf : 1 -> non-leaf, 0 -> non-leaf
    * int right_pid : -1 means null
-   * int M : order of tree
    * int m : current entry number, in range [M, 2M]
    * 2 * M * (int + int + int) : position of keys <PID, offset, size>
    * (2 * M + 1) * int : children meta page
@@ -491,8 +511,18 @@ RC Node::dumpToPage() {
    */
   int *pt = (int *) meta_page->data;
   *pt++ = 0; // type0 `meta page`
-  *pt++ =
-
+  *pt++ = leaf ? 1 : 0;
+  *pt++ = right_pid;
+  *pt++ = entries.size();
+  for (int i = 0; i < entries.size(); ++i) {
+    *(pt + i * 3 + 0) = std::get<0>(entry_pos[i]);
+    *(pt + i * 3 + 1) = std::get<1>(entry_pos[i]);
+    *(pt + i * 3 + 2) = std::get<2>(entry_pos[i]);
+  }
+  pt += 2 * btree->M * 3;
+  for (int children_pid : children_pids) {
+    *pt++ = children_pid;
+  }
   return 0;
 }
 
@@ -514,13 +544,20 @@ BPlusTree::BPlusTree(IXFileHandle &file_handle) : file_handle_(&file_handle), mo
 RC BPlusTree::loadFromFile() {
   nodes_.clear();
   modified = false;
+  /*******************************************************************
+   * 0. `tree meta page` (which will always be the first page
+   * int root_page : node meta page num for root, -1 if tree empty
+   * int key_type : 0 -> int, 1 -> float, 2 -> varchar
+   * int M : order of tree
+   * ******************************************************************
+   */
   auto ret = file_handle_->getPage(TREE_META_PID);
   if (ret.first) {
     DB_WARNING << "failed to load B+tree from file";
     return -1;
   }
   IXPage *tree_meta_page = ret.second;
-  int *pt = (int *) tree_meta_page->data + IXPage::DEFAULT_DATA_END;
+  int *pt = (int *) tree_meta_page->data;
   int root_pid = *pt++;
   int key_type_val = *pt++;
   if (key_type_val > 2) {
@@ -558,16 +595,42 @@ std::shared_ptr<BPlusTree> BPlusTree::loadTreeFromFile(IXFileHandle &file_handle
 
 RC BPlusTree::dumpToFile() {
   if (!modified) return 0;
-  // TODO
+  // dump meta page
+  /*******************************************************************
+   * 0. `tree meta page` (which will always be the first page
+   * int root_page : node meta page num for root, -1 if tree empty
+   * int key_type : 0 -> int, 1 -> float, 2 -> varchar
+   * int M : order of tree
+   * ******************************************************************
+   */
+  auto ret = file_handle_->getPage(TREE_META_PID);
+  if (ret.first) {
+    DB_WARNING << "failed to load B+tree from file";
+    return -1;
+  }
+  IXPage *tree_meta_page = ret.second;
+  int *pt = (int *) tree_meta_page->data;
+  *pt++ = root_ ? root_->getPid() : -1;
+  int key_type_val = static_cast<int>(key_type);
+  *pt++ = key_type_val;
+  *pt++ = M;
+  // dump nodes
+  for (auto &kv : nodes_) {
+    if (kv.second->dumpToPage()) {
+      DB_WARNING << "Failed to dump node with pid " << kv.first;
+      return -1;
+    }
+  }
+  return 0;
 }
 
-
 RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
+  modified = true;
   if (!root_) {
     auto ret = createNode(true);
     if (!ret.first) return -1;
     root_ = ret.second;
-    root_->entries.emplace_back(key, data);
+    root_->entriesNonConst().emplace_back(key, data);
     return 0;
   }
   std::vector<std::pair<Node *, int>> path{{root_, 0}};
@@ -577,38 +640,40 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
   int entry_idx = res.first;
   if (res.second) {
     // key exist, replace data
-    node->entries[entry_idx].second = data;
+    node->entriesNonConst()[entry_idx].second = data;
   } else {
     // create key, insert to entry_idx
-    node->entries.insert(node->entries.begin() + entry_idx, {key, data});
-    if (node->entries.size() > MAX_ENTRY()) {
+    auto &node_entries = node->entriesNonConst();
+    node_entries.insert(node_entries.begin() + entry_idx, {key, data});
+    if (node_entries.size() > MAX_ENTRY()) {
       // split: [0,M], [M+1, 2M+1], and copy_up/push_up M+1 key to parent, recursively split up
       Node *cur_node = node;
-      while (cur_node->entries.size() > MAX_ENTRY()) {
+      while (cur_node->entriesConst().size() > MAX_ENTRY()) {
         idx_in_parent = path.back().second;
         path.pop_back();
         Node *parent = path.empty() ? nullptr : path.back().first;
 
-        std::deque<Node::data_t> &entries = cur_node->entries;
-        auto ret = createNode(cur_node->leaf);
+        std::deque<Node::data_t> &entries = cur_node->entriesNonConst();
+        auto ret = createNode(cur_node->isLeaf());
         Node *new_node = ret.second;
         // split entries
         Key mid_key = entries[M].first;
-        if (cur_node->leaf) {
+        auto &new_node_entries = new_node->entriesNonConst();
+        if (cur_node->isLeaf()) {
           // copy_up key and split data
-          new_node->entries.insert(new_node->entries.end(), entries.begin() + M, entries.end());
+          new_node_entries.insert(new_node_entries.end(), entries.begin() + M, entries.end());
           entries.resize(M);
         } else {
           // push_up key and split data/children
-          new_node->entries.insert(new_node->entries.end(), entries.begin() + M + 1, entries.end());
+          new_node_entries.insert(new_node_entries.end(), entries.begin() + M + 1, entries.end());
           entries.resize(M);
-          std::deque<int> &children = cur_node->children_pids;
-          new_node->children_pids.insert(new_node->children_pids.end(), children.begin() + M + 1, children.end());
+          std::deque<int> &children = cur_node->childrenPidsNonConst();
+          children.insert(children.end(), children.begin() + M + 1, children.end());
           children.resize(M + 1);
         }
         // modify right
-        new_node->setRight(cur_node->right_pid);
-        cur_node->setRight(new_node->pid);
+        new_node->setRightPid(cur_node->getRightPid());
+        cur_node->setRightPid(new_node->getPid());
         // pull mid_key up to parent
         if (!parent) {
           // split root
@@ -618,12 +683,14 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
             return -1;
           }
           Node *new_root = ret.second;
-          new_root->children_pids.push_back(root_->pid);
+          new_root->childrenPidsNonConst().push_back(root_->getPid());
           root_ = new_root;
           parent = new_root;
         }
-        parent->children_pids.insert(parent->children_pids.begin() + idx_in_parent + 1, new_node->pid);
-        parent->entries.insert(parent->entries.begin() + idx_in_parent, {mid_key, nullptr});
+        auto &parent_children = parent->childrenPidsNonConst();
+        auto &parent_entires = parent->entriesNonConst();
+        parent_children.insert(parent_children.begin() + idx_in_parent + 1, new_node->getPid());
+        parent_entires.insert(parent_entires.begin() + idx_in_parent, {mid_key, nullptr});
         cur_node = parent;
       }
     }
@@ -631,14 +698,15 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
 }
 
 bool BPlusTree::erase(const Key &key) {
+  modified = true;
   if (!root_) return false;
   std::vector<std::pair<Node *, int>> path{{root_, 0}};
   auto res = search(key, path);
   if (!res.second) return false;
   Node *node = path.back().first;
   int idx = res.first;
-  node->entries.erase(node->entries.begin() + idx);
-  while (node != root_ && node->entries.size() < M) {
+  node->entriesNonConst().erase(node->entriesNonConst().begin() + idx);
+  while (node != root_ && node->entriesConst().size() < M) {
     // borrow from sibling or merge
     int idx_in_parent = path.back().second;
     path.pop_back();
@@ -646,7 +714,7 @@ bool BPlusTree::erase(const Key &key) {
     Node *left, *right;
     bool borrow_from_right = true;
     int left_idx;
-    if (idx_in_parent != parent->children_pids.size() - 1) {
+    if (idx_in_parent != parent->childrenPidsConst().size() - 1) {
       left_idx = idx_in_parent;
       left = node;
       right = node->getRight();
@@ -658,32 +726,32 @@ bool BPlusTree::erase(const Key &key) {
     }
     bool merge = false;
     if (borrow_from_right) {
-      if (right->entries.size() > M) {
-        if (node->leaf) {
-          left->entries.push_back(right->entries.front());
-          right->entries.pop_front();
-          parent->entries[left_idx] = {right->entries.front().first, nullptr};
+      if (right->entriesConst().size() > M) {
+        if (node->isLeaf()) {
+          left->entriesNonConst().push_back(right->entriesConst().front());
+          right->entriesNonConst().pop_front();
+          parent->entriesNonConst()[left_idx] = {right->entriesConst().front().first, nullptr};
         } else {
-          left->children_pids.push_back(right->children_pids.front());
-          right->children_pids.pop_front();
-          left->entries.push_back(parent->entries[left_idx]);
-          parent->entries[left_idx] = right->entries.front();
-          right->entries.pop_front();
+          left->childrenPidsNonConst().push_back(right->childrenPidsConst().front());
+          right->childrenPidsNonConst().pop_front();
+          left->entriesNonConst().push_back(parent->entriesConst().at(left_idx));
+          parent->entriesNonConst()[left_idx] = right->entriesConst().front();
+          right->entriesNonConst().pop_front();
         }
       } else
         merge = true;
     } else {
-      if (left->entries.size() > M) {
-        if (node->leaf) {
-          right->entries.push_front(left->entries.back());
-          left->entries.pop_back();
-          parent->entries[left_idx] = {right->entries.front().first, nullptr};
+      if (left->entriesConst().size() > M) {
+        if (node->isLeaf()) {
+          right->entriesNonConst().push_front(left->entriesConst().back());
+          left->entriesNonConst().pop_back();
+          parent->entriesNonConst()[left_idx] = {right->entriesConst().front().first, nullptr};
         } else {
-          right->children_pids.push_front(left->children_pids.back());
-          left->children_pids.pop_back();
-          right->entries.push_front(parent->entries[left_idx]);
-          parent->entries[left_idx] = left->entries.back();
-          left->entries.pop_back();
+          right->childrenPidsNonConst().push_front(left->childrenPidsConst().back());
+          left->childrenPidsNonConst().pop_back();
+          right->entriesNonConst().push_front(parent->entriesConst().at(left_idx));
+          parent->entriesNonConst()[left_idx] = left->entriesConst().back();
+          left->entriesNonConst().pop_back();
         }
       } else
         merge = true;
@@ -691,20 +759,26 @@ bool BPlusTree::erase(const Key &key) {
     if (merge) {
       //delete right
       // merge
-      if (!node->leaf) {
-        left->entries.push_back(parent->entries[left_idx]);
-        left->children_pids.insert(left->children_pids.end(), right->children_pids.begin(), right->children_pids.end());
+      if (!node->isLeaf()) {
+        left->entriesNonConst().push_back(parent->entriesConst().at(left_idx));
+        auto &left_children_nc = left->childrenPidsNonConst();
+        const auto &right_children_c = right->childrenPidsConst();
+        left_children_nc.insert(left_children_nc.end(), right_children_c.begin(), right_children_c.end());
       }
-      left->entries.insert(left->entries.end(), right->entries.begin(), right->entries.end());
+      auto &left_entries_nc = left->entriesNonConst();
+      const auto &right_entires_c = right->entriesConst();
+      left_entries_nc.insert(left_entries_nc.end(), right_entires_c.begin(), right_entires_c.end());
 
-      left->setRight(right->right_pid);
+      left->setRightPid(right->getRightPid());
+      deleteNode(right->getPid());
       // delete from parent
-      parent->entries.erase(parent->entries.begin() + left_idx);
-      parent->children_pids.erase(parent->children_pids.begin() + left_idx + 1);
-      if (parent->entries.empty()) {
+      parent->entriesNonConst().erase(parent->entriesNonConst().begin() + left_idx);
+      parent->childrenPidsNonConst().erase(parent->childrenPidsNonConst().begin() + left_idx + 1);
+      if (parent->entriesConst().empty()) {
         // delete old root
-        assert(parent->children_pids.front() == left->pid);
+        assert(parent->childrenPidsConst().front() == left->getPid());
         root_ = parent->getChild(0);
+        deleteNode(parent->getPid());
         break;
       }
     }
@@ -720,6 +794,7 @@ bool BPlusTree::find(const Key &key) {
 }
 
 RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
+  modified = true;
   if (root_) {
     DB_WARNING << "can only bulkLoad when tree is empty!";
     return -1;
@@ -745,19 +820,19 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
       j = i + step;
       last = true;
     }
-    new_node->entries.insert(new_node->entries.end(), entries.begin() + i, entries.begin() + j);
+    new_node->entriesNonConst().insert(new_node->entriesNonConst().end(), entries.begin() + i, entries.begin() + j);
     i += step;
   }
   entries.resize(prev_layer.size());
   for (int i = 1; i < prev_layer.size(); ++i) {
-    entries[i] = {prev_layer[i]->entries.front().first, nullptr};
+    entries[i] = {prev_layer[i]->entriesConst().front().first, nullptr};
   }
   // build index layer
 
   while (prev_layer.size() > 1) {
     // connect layer from left to right
     for (int i = 1; i < prev_layer.size(); ++i) {
-      prev_layer[i - 1]->setRight(prev_layer[i]->pid);
+      prev_layer[i - 1]->setRightPid(prev_layer[i]->getPid());
     }
     // build cur layer using entries
     bool last = false;
@@ -775,18 +850,18 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
         j = i + step;
         last = true;
       }
-      new_node->entries.insert(new_node->entries.end(),
+      new_node->entriesNonConst().insert(new_node->entriesNonConst().end(),
                                entries.begin() + i + 1,
                                entries.begin() + j);
       for (int k = i; k < j; ++k) {
-        new_node->children_pids.push_back(prev_layer[k]->pid);
+        new_node->childrenPidsNonConst().push_back(prev_layer[k]->getPid());
       }
       i += step;
     }
 
     entries.resize(cur_layer.size());
     for (int k = 0; k < cur_layer.size(); ++k) {
-      entries[k] = {cur_layer[k]->entries.front().first, nullptr};
+      entries[k] = {cur_layer[k]->entriesConst().front().first, nullptr};
     }
     prev_layer = std::move(cur_layer);
     cur_layer = {};
@@ -798,12 +873,12 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
 std::pair<int, bool> BPlusTree::search(Key key, std::vector<std::pair<Node *, int>> &path) {
   // binary search
   Node *node = path.back().first;
-  int low = 0, high = node->entries.size() - 1;
+  int low = 0, high = node->entriesConst().size() - 1;
   while (low < high) {
     int mid = low + (high - low) / 2;
-    if (key < node->entries[mid].first) {
+    if (key < node->entriesConst()[mid].first) {
       high = mid;
-    } else if (node->entries[mid].first < key) {
+    } else if (node->entriesConst()[mid].first < key) {
       low = mid + 1;
     } else {
       low = mid;
@@ -812,21 +887,21 @@ std::pair<int, bool> BPlusTree::search(Key key, std::vector<std::pair<Node *, in
   }
   // if not found, low point to the first element which is greater than key
   // if key is greater than all elements, low = entries.size() - 1, should handle this corner case
-  if (node->leaf) {
-    if (node->entries[low].first == key) {
+  if (node->isLeaf()) {
+    if (node->entriesConst().at(low).first == key) {
       return {low, true};
     } else {
-      if (low == node->entries.size() - 1 && node->entries.back().first < key) {
+      if (low == node->entriesConst().size() - 1 && node->entriesConst().back().first < key) {
         return {low + 1, false};
       } else {
         return {low, false};
       }
     }
   } else {
-    if (node->entries[low].first == key) {
+    if (node->entriesConst().at(low).first == key) {
       path.emplace_back(node->getChild(low + 1), low + 1);
     } else {
-      if (low == node->entries.size() - 1 && node->entries.back().first < key) {
+      if (low == node->entriesConst().size() - 1 && node->entriesConst().back().first < key) {
         path.emplace_back(node->getChild(low + 1), low + 1);
       } else {
         path.emplace_back(node->getChild(low), low);
@@ -860,12 +935,20 @@ std::pair<RC, Node *> BPlusTree::getNode(int pid) {
   return {0, nodes_[pid].get()};
 }
 
+RC BPlusTree::deleteNode(int pid) {
+  if (!nodes_.count(pid)) {
+    DB_WARNING << "deleteNode failed! pid " << pid << " not exist!";
+    return -1;
+  }
+  return 0;
+}
+
 void BPlusTree::printEntries() const {
   std::vector<Key> keys;
   Node *node = root_;
-  while (!node->leaf) node = node->getChild(0);
+  while (!node->isLeaf()) node = node->getChild(0);
   while (node) {
-    for (auto &data : node->entries) keys.push_back(data.first);
+    for (auto &data : node->entriesConst()) keys.push_back(data.first);
     node = node->getRight();
   }
   for (auto &k : keys) std::cout << k.ToString() << ", ";
@@ -884,10 +967,10 @@ void BPlusTree::printTree() const {
         continue;
       }
       std::cout << node->toString() << "\t";
-      for (int j = 0; j < node->children_pids.size(); ++j) {
+      for (int j = 0; j < node->childrenPidsConst().size(); ++j) {
         q.push_back(node->getChild(j));
       }
-      if (!node->leaf) q.push_back(nullptr);
+      if (!node->isLeaf()) q.push_back(nullptr);
     }
     std::cout << std::endl;
   }
