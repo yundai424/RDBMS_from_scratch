@@ -149,25 +149,30 @@ class IXFileHandle {
  *
  */
 
-struct IXPage {
-
+class IXPage {
+ public:
+  friend class IXFileHandle;
   /*
    * for `data page`
    */
   static const size_t MAX_DATA_SIZE;
   static const size_t DEFAULT_DATA_END;
 
-  char *data;
-
   bool meta;
-
-  bool modify;
-
   PID pid;
 
-  explicit IXPage(PID page_id);
+  IXPage(PID page_id, IXFileHandle * handle);
+  const char * dataConst() const;
+  char * dataNonConst();
 
   ~IXPage();
+
+ private:
+  bool modify;
+  char *data;
+  IXFileHandle * file_handle;
+
+  RC dump();
 
 };
 

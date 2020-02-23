@@ -9,7 +9,7 @@ IndexManager &IndexManager::instance() {
 }
 
 RC IndexManager::createFile(const std::string &fileName) {
-  return -1;
+
 }
 
 RC IndexManager::destroyFile(const std::string &fileName) {
@@ -210,7 +210,6 @@ std::pair<RC, IXPage *> IXFileHandle::getPage(int pid) {
   }
   if (!pages.count(pid)) {
     auto cur_page = std::make_shared<IXPage>(pid);
-    cur_page->data = static_cast<char *>(malloc(PAGE_SIZE));
     readPage(pid, cur_page->data);
     pages[pid] = cur_page;
   }
@@ -240,7 +239,25 @@ RC IXFileHandle::releasePage(IXPage *page) {
 const size_t IXPage::MAX_DATA_SIZE = PAGE_SIZE - sizeof(int);
 const size_t IXPage::DEFAULT_DATA_END = sizeof(int);
 
-IXPage::IXPage(PID page_id) : pid(page_id), data(nullptr), modify(false) {}
+IXPage::IXPage(PID page_id, IXFileHandle *handle) : pid(page_id), data(nullptr), modify(false), file_handle(handle) {
+  data = static_cast<char *>(malloc(PAGE_SIZE));
+}
+
+const char *IXPage::dataConst() const {
+  return data;
+}
+
+char *IXPage::dataNonConst() {
+  return data;
+}
+
+RC IXPage::dump() {
+  if (modify) {
+    DB_INFO << "dump IXPage " << pid;
+    return file_handle->writePage(pid, data);
+  }
+  return 0;
+}
 
 IXPage::~IXPage() {
   if (data) free(data);
@@ -415,7 +432,7 @@ RC Node::loadFromPage() {
    * following data...
    *
    */
-  int *pt = (int *) meta_page->data;
+  const int *pt = (int *) meta_page->dataConst();
   ++pt;
   leaf = (*pt++) == 1;
   right_pid = *pt++;
@@ -433,7 +450,7 @@ RC Node::loadFromPage() {
     if (ret.first) return -1;
     IXPage *page = ret.second;
     data_pages_set.insert(page);
-    entries.emplace_back(Key(btree->key_type, page->data + offset), std::make_shared<Data>(0));
+    entries.emplace_back(Key(btree->key_type, page->dataConst() + offset), std::make_shared<Data>(0));
   }
   data_pages = {data_pages_set.begin(), data_pages_set.end()};
   // load children pids
@@ -463,6 +480,7 @@ std::shared_ptr<Node> Node::loadNodeFromPage(BPlusTree *tree_ptr, IXPage *meta_p
 
 RC Node::dumpToPage() {
   if (!modified) return 0;
+  DB_INFO << "dump node " << pid;
   // write data page
   int cur_page_idx = 0;
   int free_space = 0;
@@ -481,7 +499,7 @@ RC Node::dumpToPage() {
         data_pages.emplace_back(ret.second);
       }
       IXPage *next_page = data_pages[cur_page_idx++];
-      data_pt = next_page->data;
+      data_pt = next_page->dataNonConst();
       *((int *) data_pt) = 1; // type1 `data page`
       data_pt += sizeof(int);
       free_space = IXPage::MAX_DATA_SIZE;
@@ -509,7 +527,7 @@ RC Node::dumpToPage() {
    * following data...
    *
    */
-  int *pt = (int *) meta_page->data;
+  int *pt = (int *) meta_page->dataNonConst();
   *pt++ = 0; // type0 `meta page`
   *pt++ = leaf ? 1 : 0;
   *pt++ = right_pid;
@@ -528,6 +546,7 @@ RC Node::dumpToPage() {
 
 std::string Node::toString() const {
   std::ostringstream oss;
+  oss << "pid " << pid << ":";
   oss << "[";
   for (int j = 0; j < entries.size(); ++j) {
     oss << entries[j].first.ToString();
@@ -557,7 +576,7 @@ RC BPlusTree::loadFromFile() {
     return -1;
   }
   IXPage *tree_meta_page = ret.second;
-  int *pt = (int *) tree_meta_page->data;
+  const int *pt = (const int *) tree_meta_page->dataConst();
   int root_pid = *pt++;
   int key_type_val = *pt++;
   if (key_type_val > 2) {
@@ -595,6 +614,7 @@ std::shared_ptr<BPlusTree> BPlusTree::loadTreeFromFile(IXFileHandle &file_handle
 
 RC BPlusTree::dumpToFile() {
   if (!modified) return 0;
+  DB_INFO << "dump B+tree";
   // dump meta page
   /*******************************************************************
    * 0. `tree meta page` (which will always be the first page
@@ -609,7 +629,7 @@ RC BPlusTree::dumpToFile() {
     return -1;
   }
   IXPage *tree_meta_page = ret.second;
-  int *pt = (int *) tree_meta_page->data;
+  int *pt = (int *) tree_meta_page->dataNonConst();
   *pt++ = root_ ? root_->getPid() : -1;
   int key_type_val = static_cast<int>(key_type);
   *pt++ = key_type_val;
@@ -851,8 +871,8 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
         last = true;
       }
       new_node->entriesNonConst().insert(new_node->entriesNonConst().end(),
-                               entries.begin() + i + 1,
-                               entries.begin() + j);
+                                         entries.begin() + i + 1,
+                                         entries.begin() + j);
       for (int k = i; k < j; ++k) {
         new_node->childrenPidsNonConst().push_back(prev_layer[k]->getPid());
       }
