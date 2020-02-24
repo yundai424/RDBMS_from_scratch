@@ -967,6 +967,7 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
   }
   std::sort(entries.begin(), entries.end());
   std::vector<Node *> cur_layer, prev_layer;
+  std::vector<std::pair<Key, Key>> cur_node_range, prev_node_range;
   // build leaf layer
   bool last = false;
   for (int i = 0; i < entries.size();) {
@@ -983,11 +984,12 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
       last = true;
     }
     new_node->entriesNonConst().insert(new_node->entriesNonConst().end(), entries.begin() + i, entries.begin() + j);
+    prev_node_range.emplace_back(new_node->entriesConst().front().first, new_node->entriesConst().back().first);
     i += step;
   }
   entries.resize(prev_layer.size());
   for (int i = 1; i < prev_layer.size(); ++i) {
-    entries[i] = {prev_layer[i]->entriesConst().front().first, nullptr};
+    entries[i] = {prev_node_range[i].first, nullptr};
   }
   // build index layer
 
@@ -1004,7 +1006,6 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
       auto ret = createNode(false);
       if (ret.first) return -1;
       Node *new_node = ret.second;
-      cur_layer.push_back(new_node);
       // we will drop the first key, leaving MAX_ENTRY key and MAX_ENTRY + 1 children
       if (!last && i + 2 * (MAX_ENTRY() + 1) >= entries.size() && i + MAX_ENTRY() + 1 < entries.size()) {
         // last two bunch, we need to split average to avoid last node element < M
@@ -1018,15 +1019,19 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
       for (int k = i; k < j; ++k) {
         new_node->childrenPidsNonConst().push_back(prev_layer[k]->getPid());
       }
+      cur_layer.push_back(new_node);
+      cur_node_range.emplace_back(prev_node_range[i].first, prev_node_range[j].second);
       i += step;
     }
 
     entries.resize(cur_layer.size());
     for (int k = 0; k < cur_layer.size(); ++k) {
-      entries[k] = {cur_layer[k]->entriesConst().front().first, nullptr};
+      entries[k] = {cur_node_range[k].first, nullptr};
     }
     prev_layer = std::move(cur_layer);
     cur_layer = {};
+    prev_node_range = std::move(cur_node_range);
+    cur_node_range = {};
 
   }
   root_ = prev_layer.front();
