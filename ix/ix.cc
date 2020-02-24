@@ -594,6 +594,10 @@ RC Node::dumpToPage() {
     entry_pos.emplace_back(data_pages[cur_page_idx]->pid, offset, entry_size);
     offset += entry_size;
   }
+
+  for (int i = cur_page_idx + 1; i < data_pages.size(); ++i) {
+    btree->file_handle_->releasePage(data_pages[i]);
+  }
   // write meta page
 
   /*******************************************************************
