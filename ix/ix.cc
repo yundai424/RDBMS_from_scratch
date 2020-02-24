@@ -136,6 +136,12 @@ IXFileHandle::IXFileHandle() {
 IXFileHandle::~IXFileHandle() {
 }
 
+
+BPlusTree * IXFileHandle::getTree(Attribute attr) {
+  if (!tree) tree = BPlusTree::createTreeOrLoadIfExist(*this, attr);
+  return tree.get();
+}
+
 RC IXFileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePageCount, unsigned &appendPageCount) {
   readPageCount = readPageCounter;
   writePageCount = writePageCounter;
@@ -566,7 +572,7 @@ RC Node::dumpToPage() {
   if (!modified) return 0;
   DB_INFO << "dump node " << pid;
   // write data page
-  int cur_page_idx = 0;
+  int cur_page_idx = -1;
   int free_space = 0;
   int offset = -1;
   char *data_pt = nullptr;
@@ -576,13 +582,14 @@ RC Node::dumpToPage() {
   for (auto &entry : entries) {
     int entry_size = entry.first.getSize();
     if (entry_size > free_space) {
-      // new page
+      // next page
+      ++cur_page_idx;
       if (cur_page_idx == data_pages.size()) {
         auto ret = btree->file_handle_->requestNewPage();
         if (ret.first) return -1;
         data_pages.emplace_back(ret.second);
       }
-      IXPage *next_page = data_pages[cur_page_idx++];
+      IXPage *next_page = data_pages[cur_page_idx];
       data_pt = next_page->dataNonConst();
       *((int *) data_pt) = 1; // type1 `data page`
       data_pt += sizeof(int);
@@ -691,17 +698,25 @@ RC BPlusTree::loadFromFile() {
 }
 
 std::shared_ptr<BPlusTree> BPlusTree::createTreeOrLoadIfExist(IXFileHandle &file_handle, Attribute attr) {
-  if (!global_index_map.count(file_handle.name)) {
-    std::shared_ptr<BPlusTree> tree;
-    if (file_handle.getNumberOfPages()) {
-      // exist
-      tree = loadTreeFromFile(file_handle, attr);
-    } else {
-      tree = createTree(file_handle, DEFAULT_ORDER_M, attr);
-    }
-    global_index_map[file_handle.name] = tree;
+//  if (!global_index_map.count(file_handle.name)) {
+//    std::shared_ptr<BPlusTree> tree;
+//    if (file_handle.getNumberOfPages()) {
+//      // exist
+//      tree = loadTreeFromFile(file_handle, attr);
+//    } else {
+//      tree = createTree(file_handle, DEFAULT_ORDER_M, attr);
+//    }
+//    global_index_map[file_handle.name] = tree;
+//  }
+//  return global_index_map[file_handle.name];
+  std::shared_ptr<BPlusTree> tree;
+  if (file_handle.getNumberOfPages()) {
+    // exist
+    tree = loadTreeFromFile(file_handle, attr);
+  } else {
+    tree = createTree(file_handle, DEFAULT_ORDER_M, attr);
   }
-  return global_index_map[file_handle.name];
+  return tree;
 }
 
 std::shared_ptr<BPlusTree> BPlusTree::createTree(IXFileHandle &file_handle, int order, Attribute attr) {

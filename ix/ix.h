@@ -98,6 +98,8 @@ class IX_ScanIterator {
 
 struct IXPage;
 
+class BPlusTree;
+
 /**
  * first page is meta page store three counters
  *
@@ -105,6 +107,11 @@ struct IXPage;
  * first 4 bytes(int) indicate numbers of free pages, followed by page ids
  */
 class IXFileHandle {
+  std::shared_ptr<BPlusTree> tree;
+  std::unordered_map<int, std::shared_ptr<IXPage>> pages;
+  std::unordered_set<int> free_pages; // some pages might be freed after entry deletion
+
+  bool meta_modified_;
  public:
 
   // variables to keep counter for each operation
@@ -112,20 +119,17 @@ class IXFileHandle {
   unsigned writePageCounter;
   unsigned appendPageCounter;
 
-  std::unordered_set<int> free_pages; // some pages might be freed after entry deletion
-
   // Constructor
   IXFileHandle();
 
   // Destructor
   ~IXFileHandle();
 
+  BPlusTree * getTree(Attribute attr);
   // Put the current counter values of associated PF FileHandles into variables
   RC collectCounterValues(unsigned &readPageCount, unsigned &writePageCount, unsigned &appendPageCount);
 
   std::string name;
-  std::unordered_map<int, std::shared_ptr<IXPage>> pages;
-  bool meta_modified_;
 
   RC readPage(PageNum pageNum, void *data);                           // Get a specific page
   RC writePage(PageNum pageNum, const void *data);                    // Write a specific page
