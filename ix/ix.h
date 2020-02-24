@@ -56,14 +56,38 @@ class IndexManager {
 
 };
 
+class Node;
+class Key;
+
 class IX_ScanIterator {
+ private:
+
+  bool init = false;
+
+  Node *node;
+  int idx;
+
+  std::shared_ptr<Key> low_key;
+  std::shared_ptr<Key> high_key;
+
+  bool low_inclusive;
+  bool high_inclusive;
+
  public:
+  friend class IndexManager;
 
   // Constructor
   IX_ScanIterator();
 
   // Destructor
   ~IX_ScanIterator();
+
+  RC initIterator(IXFileHandle &ixFileHandle,
+                  const Attribute &attribute,
+                  const void *lowKey,
+                  const void *highKey,
+                  bool lowKeyInclusive,
+                  bool highKeyInclusive);
 
   // Get next matching entry
   RC getNextEntry(RID &rid, void *key);
@@ -131,8 +155,9 @@ class IXFileHandle {
  * ******************************************************************
  * 0. `tree meta page` (which will always be the first page
  * int root_page : node meta page num for root, -1 if tree empty
- * int key_type : 0 -> int, 1 -> float, 2 -> varchar
  * int M : order of tree
+ * int key_type : 0 -> int, 1 -> float, 2 -> varchar
+ * varchar attr_name : attr used for index, format is varchar (int + string)
  * ******************************************************************
  * 1. `node meta page`
  * int page_type : 0 -> meta page, 1 -> data page
@@ -161,16 +186,16 @@ class IXPage {
   bool meta;
   PID pid;
 
-  IXPage(PID page_id, IXFileHandle * handle);
-  const char * dataConst() const;
-  char * dataNonConst();
+  IXPage(PID page_id, IXFileHandle *handle);
+  const char *dataConst() const;
+  char *dataNonConst();
 
   ~IXPage();
 
  private:
   bool modify;
   char *data;
-  IXFileHandle * file_handle;
+  IXFileHandle *file_handle;
 
   RC dump();
 
@@ -194,13 +219,17 @@ struct Key {
   unsigned page_num;
   unsigned slot_num;
 
+  Key() = default;
+
   Key(AttrType key_type_, const char *key_val, RID rid);
 
   Key(AttrType key_tpye_, const char *src); // deserialize from binary
 
   int getSize() const;
 
-  void serialize(char *dst) const; // serialize to binary
+  void dump(char *dst) const; // dump the whole key to binary
+
+  void fetchKey(char *dst) const; // write the key val to dst (i, f or s)
 
   std::string ToString() const;
 
@@ -229,12 +258,7 @@ class Node {
   std::deque<int> children_pids;
   std::deque<data_t> entries; // size = children.size() - 1
 
-  /*
-   * set ctor to private
-   * construct node using static function instead to avoid confusion.
-   * either construct an empty node in memory, and associate it with a page or construct from disk
-   */
-  Node(BPlusTree *tree_ptr, IXPage *meta_p);
+
 
   RC loadFromPage();
  public:
@@ -255,6 +279,13 @@ class Node {
 
   std::string toString() const;
 
+  /*
+   * do not use ctor directly
+   * construct node using static function instead to avoid confusion.
+   * either construct an empty node in memory, and associate it with a page or construct from disk
+   */
+  Node(BPlusTree *tree_ptr, IXPage *meta_p);
+
   static std::shared_ptr<Node> createNode(BPlusTree *tree_ptr, IXPage *meta_p, bool is_leaf);
 
   static std::shared_ptr<Node> loadNodeFromPage(BPlusTree *tree_ptr, IXPage *meta_p);
@@ -265,15 +296,18 @@ class BPlusTree {
   friend class Node;
  private:
   const static int TREE_META_PID;
-//  std::vector<std::shared_ptr<Node>> nodes;
+  const static int DEFAULT_ORDER_M;
+
+  static std::unordered_map<std::string, std::shared_ptr<BPlusTree>> global_index_map;
+
   std::unordered_map<int, std::shared_ptr<Node>> nodes_;
   Node *root_;
   IXFileHandle *file_handle_;
-  AttrType key_type;
+  Attribute key_attr;
   bool modified;
   int M; // order, # of key should be in range [M, 2M], and # of children should be [M+1, 2M+1]
 
-/**
+  /**
    * DFS helper function to search for key using binary search
    * @param key
    * @param path DFS path, node and its idx in its parent's children, the last node will always be a leaf node
@@ -282,13 +316,10 @@ class BPlusTree {
    */
   std::pair<int, bool> search(Key key, std::vector<std::pair<Node *, int>> &path);
 
-  /*
-   * set ctor to private
-   * use static function to create from memory or load from file
-   */
-  BPlusTree(IXFileHandle &file_handle);
-
   RC loadFromFile();
+
+  static std::shared_ptr<BPlusTree> createTree(IXFileHandle &file_handle, int order, Attribute attr);
+  static std::shared_ptr<BPlusTree> loadTreeFromFile(IXFileHandle &file_handle, Attribute attr);
 
   std::pair<RC, Node *> createNode(bool leaf);
   std::pair<RC, Node *> getNode(int pid);
@@ -296,20 +327,34 @@ class BPlusTree {
 
  public:
 
+  /*
+   * do not use ctor directly
+   * use static function to create from memory or load from file
+   */
+  BPlusTree(IXFileHandle &file_handle);
+
+  static std::shared_ptr<BPlusTree> createTreeOrLoadIfExist(IXFileHandle &file_handle, Attribute attr);
+
   int inline MAX_ENTRY() const;
 
-  RC insert(const Key &key, std::shared_ptr<Data> data);
+  RC insert(const Key &key, std::shared_ptr<Data> data = nullptr);
   bool erase(const Key &key);
-  bool find(const Key &key);
+  bool contains(const Key &key);
+  /**
+   *
+   * @param key
+   * @return Node and idx point to key if exactly matched, otherwise idx point to the first element greater than key
+   */
+  std::pair<Node *, int> find(const Key &key);
+  Node *getFirstLeaf() const;
   RC bulkLoad(std::vector<Node::data_t> entries);
 
   RC dumpToFile();
 
-  static std::shared_ptr<BPlusTree> createTree(IXFileHandle &file_handle, int order, AttrType key_type);
-  static std::shared_ptr<BPlusTree> loadTreeFromFile(IXFileHandle &file_handle);
-
   void printEntries() const;
   void printTree() const;
+
+  ~BPlusTree();
 
 };
 

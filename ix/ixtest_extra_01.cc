@@ -1,7 +1,7 @@
 #include "ix.h"
 #include "ix_test_util.h"
 
-int testCase_extra_1(const string &indexFileName, const Attribute &attribute) {
+int testCase_extra_1(const std::string &indexFileName, const Attribute &attribute) {
     // Checks whether duplicated entries spanning multiple page are handled properly or not.
     //
     // Functions tested

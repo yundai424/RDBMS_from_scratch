@@ -35,7 +35,7 @@ RC PagedFileManager::createFile(const std::string &fileName) {
 
 RC PagedFileManager::destroyFile(const std::string &fileName) {
   if (!ifFileExists(fileName)) {
-//    DB_WARNING << "try to delete non-exist file " << fileName;
+    DB_WARNING << "try to delete non-exist file " << fileName;
     return -1;
   }
   return remove(fileName.c_str());
