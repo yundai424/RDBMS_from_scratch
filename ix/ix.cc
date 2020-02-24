@@ -31,7 +31,7 @@ RC IndexManager::closeFile(IXFileHandle &ixFileHandle) {
 
 RC IndexManager::insertEntry(IXFileHandle &ixFileHandle, const Attribute &attribute, const void *key, const RID &rid) {
   auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
-  Key k(attribute.type, static_cast<const char *>(key));
+  Key k(attribute.type, static_cast<const char *>(key), rid);
   return tree->insert(k, nullptr);
 }
 
@@ -645,7 +645,7 @@ const int BPlusTree::DEFAULT_ORDER_M = 100;
 
 std::unordered_map<std::string, std::shared_ptr<BPlusTree>> BPlusTree::global_index_map;
 
-BPlusTree::BPlusTree(IXFileHandle &file_handle) : file_handle_(&file_handle), modified(true) {}
+BPlusTree::BPlusTree(IXFileHandle &file_handle) : file_handle_(&file_handle), modified(true), root_(nullptr) {}
 
 RC BPlusTree::loadFromFile() {
   nodes_.clear();
@@ -767,7 +767,7 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
   modified = true;
   if (!root_) {
     auto ret = createNode(true);
-    if (!ret.first) return -1;
+    if (ret.first) return -1;
     root_ = ret.second;
     root_->entriesNonConst().emplace_back(key, data);
     return 0;
@@ -817,7 +817,7 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
         if (!parent) {
           // split root
           auto ret = createNode(false);
-          if (!ret.first) {
+          if (ret.first) {
             DB_WARNING << "failed to create new root";
             return -1;
           }
@@ -1002,7 +1002,7 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
       int j = std::min(i + MAX_ENTRY() + 1, int(entries.size()));
       int step = 1 + MAX_ENTRY();
       auto ret = createNode(false);
-      if (!ret.first) return -1;
+      if (ret.first) return -1;
       Node *new_node = ret.second;
       cur_layer.push_back(new_node);
       // we will drop the first key, leaving MAX_ENTRY key and MAX_ENTRY + 1 children
