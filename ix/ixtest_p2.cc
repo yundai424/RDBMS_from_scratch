@@ -126,7 +126,7 @@ int testCase_p2(const std::string &indexFileName1, const std::string &indexFileN
     for (int i = 0; i < numOfTuples; i++) {
         B[i] = 20000 + i;
     }
-    std::random_shuffle(B, B + numOfTuples);
+    std::shuffle(B, B + numOfTuples, std::mt19937(std::random_device()()));
 
     for (int i = 0; i < numOfTuples; i++) {
         key = B[i];

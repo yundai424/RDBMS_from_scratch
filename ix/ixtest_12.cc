@@ -42,7 +42,7 @@ int testCase_12(const std::string &indexFileName, const Attribute &attribute) {
 
     for (unsigned i = 1; i <= numOfTuples; i++) {
         rid.pageNum = i;
-        rid.slotNum = i;
+        rid.slotNum = i % (SHRT_MAX);
 
         rc = indexManager.insertEntry(ixFileHandle, attribute, &key, rid);
         assert(rc == success && "indexManager::insertEntry() should not fail.");
@@ -76,9 +76,9 @@ int testCase_12(const std::string &indexFileName, const Attribute &attribute) {
     while (ix_ScanIterator.getNextEntry(rid, &key) == success) {
         std::cout << "Wrong entry returned: " << rid.pageNum << " " << rid.slotNum << " --- The test failed."
                   << std::endl;
-        rc = ix_ScanIterator.close();
-        rc = indexManager.closeFile(ixFileHandle);
-        rc = indexManager.destroyFile(indexFileName);
+        ix_ScanIterator.close();
+        indexManager.closeFile(ixFileHandle);
+        indexManager.destroyFile(indexFileName);
         return fail;
     }
 
