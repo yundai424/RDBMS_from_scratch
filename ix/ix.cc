@@ -31,14 +31,22 @@ RC IndexManager::closeFile(IXFileHandle &ixFileHandle) {
 
 RC IndexManager::insertEntry(IXFileHandle &ixFileHandle, const Attribute &attribute, const void *key, const RID &rid) {
   auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
+  if (!tree) {
+    DB_WARNING << "fail to load tree!";
+    return -1;
+  }
   Key k(attribute.type, static_cast<const char *>(key), rid);
   return tree->insert(k, nullptr);
 }
 
 RC IndexManager::deleteEntry(IXFileHandle &ixFileHandle, const Attribute &attribute, const void *key, const RID &rid) {
   auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
-  Key k(attribute.type, static_cast<const char *>(key));
-  return tree->erase(k);
+  if (!tree) {
+    DB_WARNING << "fail to load tree!";
+    return -1;
+  }
+  Key k(attribute.type, static_cast<const char *>(key),  {0, 0});
+  return (!tree->erase(k));
 }
 
 RC IndexManager::scan(IXFileHandle &ixFileHandle,
@@ -285,7 +293,7 @@ unsigned IXFileHandle::getNumberOfPages() {
 }
 
 std::pair<RC, IXPage *> IXFileHandle::getPage(int pid) {
-  if (pid >= getNumberOfPages()) {
+  if (pid >= getNumberOfPages() || pid < 0) {
     DB_WARNING << "page id " << pid << " out of range";
     return {-1, nullptr};
   }
@@ -554,7 +562,7 @@ RC Node::loadFromPage() {
   data_pages = {data_pages_set.begin(), data_pages_set.end()};
   // load children pids
   pt += 2 * btree->M * 3;
-  if (leaf) {
+  if (!leaf) {
     children_pids.clear();
     for (int i = 0; i < m + 1; ++i) {
       children_pids.emplace_back(*pt++);
