@@ -196,6 +196,8 @@ RC IXFileHandle::closeFile() {
 //    DB_WARNING << "File not opened.";
     return -1;
   }
+  pages.clear(); // then all pages will destruct and dump to disk
+
   // flush new counters to metadata
   _file.seekp(0);
   char meta_page[PAGE_SIZE];
@@ -324,6 +326,7 @@ const char *IXPage::dataConst() const {
 }
 
 char *IXPage::dataNonConst() {
+  modify = true;
   return data;
 }
 
@@ -336,6 +339,7 @@ RC IXPage::dump() {
 }
 
 IXPage::~IXPage() {
+  dump();
   if (data) free(data);
 }
 
