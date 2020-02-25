@@ -56,6 +56,7 @@ class IndexManager {
 
 };
 
+class BPlusTree;
 class Node;
 class Key;
 
@@ -63,6 +64,8 @@ class IX_ScanIterator {
  private:
 
   bool init = false;
+
+  std::shared_ptr<BPlusTree> btree;
 
   Node *node;
   int idx;
@@ -125,7 +128,7 @@ class IXFileHandle {
   // Destructor
   ~IXFileHandle();
 
-  BPlusTree * getTree(Attribute attr);
+  BPlusTree *getTree(Attribute attr);
   // Put the current counter values of associated PF FileHandles into variables
   RC collectCounterValues(unsigned &readPageCount, unsigned &writePageCount, unsigned &appendPageCount);
 
@@ -185,7 +188,7 @@ class IXPage {
    * for `data page`
    */
   static const size_t MAX_DATA_SIZE;
-  static const size_t DEFAULT_DATA_END;
+  static const size_t DEFAULT_DATA_BEGIN;
 
   bool meta;
   PID pid;
@@ -304,6 +307,7 @@ class BPlusTree {
 
   static std::unordered_map<std::string, std::shared_ptr<BPlusTree>> global_index_map;
 
+  IXPage *meta_page;
   std::unordered_map<int, std::shared_ptr<Node>> nodes_;
   Node *root_;
   IXFileHandle *file_handle_;
@@ -320,6 +324,7 @@ class BPlusTree {
    */
   std::pair<int, bool> search(Key key, std::vector<std::pair<Node *, int>> &path);
 
+  RC initTree();
   RC loadFromFile();
 
   static std::shared_ptr<BPlusTree> createTree(IXFileHandle &file_handle, int order, Attribute attr);

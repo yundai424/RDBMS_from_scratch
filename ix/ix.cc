@@ -68,6 +68,7 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
                                  bool highKeyInclusive) {
   auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
   if (!tree) return -1;
+  btree = tree;
   low_key = lowKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(lowKey)) : nullptr;
   high_key = highKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(highKey)) : nullptr;
   low_inclusive = lowKeyInclusive;
@@ -79,6 +80,7 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
   if (!low_inclusive && node && idx < node->entriesConst().size() && node->entriesConst().at(idx).first == *low_key) {
     idx++;
   }
+  init = true;
   return 0;
 }
 
@@ -119,6 +121,7 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
 }
 
 RC IX_ScanIterator::close() {
+  btree = nullptr;
   init = false;
   node = nullptr;
   idx = -1;
@@ -315,7 +318,7 @@ RC IXFileHandle::releasePage(IXPage *page) {
 }
 
 const size_t IXPage::MAX_DATA_SIZE = PAGE_SIZE - sizeof(int);
-const size_t IXPage::DEFAULT_DATA_END = sizeof(int);
+const size_t IXPage::DEFAULT_DATA_BEGIN = sizeof(int);
 
 IXPage::IXPage(PID page_id, IXFileHandle *handle) : pid(page_id), data(nullptr), modify(false), file_handle(handle) {
   data = static_cast<char *>(malloc(PAGE_SIZE));
@@ -333,6 +336,7 @@ char *IXPage::dataNonConst() {
 RC IXPage::dump() {
   if (modify) {
     DB_INFO << "dump IXPage " << pid;
+    DB_DEBUG << print_bytes(data, 50);
     return file_handle->writePage(pid, data);
   }
   return 0;
@@ -380,11 +384,11 @@ Key::Key(AttrType key_tpye_, const char *src) : key_type(key_tpye_) {
 
 int Key::getSize() const {
   switch (key_type) {
-    case AttrType::TypeInt:return sizeof(int);
+    case AttrType::TypeInt:return sizeof(int) + 2 * sizeof(int);
 
-    case AttrType::TypeReal:return sizeof(float);
+    case AttrType::TypeReal:return sizeof(float) + 2 * sizeof(int);
 
-    case AttrType::TypeVarChar:return sizeof(int) + s.size();
+    case AttrType::TypeVarChar:return sizeof(int) + s.size() + 2 * sizeof(int);
   }
   return -1;
 }
@@ -532,7 +536,6 @@ RC Node::loadFromPage() {
   ++pt;
   leaf = (*pt++) == 1;
   right_pid = *pt++;
-  btree->M = *pt++;
   int m = *pt++;
   entries.clear();
   // load data entries
@@ -576,7 +579,7 @@ std::shared_ptr<Node> Node::loadNodeFromPage(BPlusTree *tree_ptr, IXPage *meta_p
 
 RC Node::dumpToPage() {
   if (!modified) return 0;
-  DB_INFO << "dump node " << pid;
+  DB_INFO << "dump node " << pid << " with " << entries.size() << " entries";
   // write data page
   int cur_page_idx = -1;
   int free_space = 0;
@@ -599,6 +602,7 @@ RC Node::dumpToPage() {
       data_pt = next_page->dataNonConst();
       *((int *) data_pt) = 1; // type1 `data page`
       data_pt += sizeof(int);
+      offset = IXPage::DEFAULT_DATA_BEGIN;
       free_space = IXPage::MAX_DATA_SIZE;
     }
     entry.first.dump(data_pt);
@@ -664,6 +668,16 @@ std::unordered_map<std::string, std::shared_ptr<BPlusTree>> BPlusTree::global_in
 
 BPlusTree::BPlusTree(IXFileHandle &file_handle) : file_handle_(&file_handle), modified(true), root_(nullptr) {}
 
+RC BPlusTree::initTree() {
+  auto ret = file_handle_->requestNewPage();
+  if (ret.first) {
+    DB_WARNING << "Failed to init tree";
+    return -1;
+  }
+  meta_page = ret.second;
+  return 0;
+}
+
 RC BPlusTree::loadFromFile() {
   nodes_.clear();
   modified = false;
@@ -680,8 +694,8 @@ RC BPlusTree::loadFromFile() {
     DB_WARNING << "failed to load B+tree from file";
     return -1;
   }
-  IXPage *tree_meta_page = ret.second;
-  const int *pt = (const int *) tree_meta_page->dataConst();
+  meta_page = ret.second;
+  const int *pt = (const int *) meta_page->dataConst();
   int root_pid = *pt++;
   M = *pt++;
   int key_type_val = *pt++;
@@ -727,18 +741,16 @@ std::shared_ptr<BPlusTree> BPlusTree::createTreeOrLoadIfExist(IXFileHandle &file
 
 std::shared_ptr<BPlusTree> BPlusTree::createTree(IXFileHandle &file_handle, int order, Attribute attr) {
   auto tree = std::make_shared<BPlusTree>(file_handle);
+  if (tree->initTree()) return nullptr;
+  tree->key_attr = attr;
   tree->M = order;
-  if (!tree->nodes_.empty()) {
-    DB_WARNING << "Can not init a non-empty b+tree";
-    return nullptr;
-  }
   tree->modified = true;
   return tree;
 }
 
 std::shared_ptr<BPlusTree> BPlusTree::loadTreeFromFile(IXFileHandle &file_handle, Attribute attr) {
   auto tree = std::make_shared<BPlusTree>(file_handle);
-  if (!tree->loadFromFile()) return nullptr;
+  if (tree->loadFromFile()) return nullptr;
   if (tree->key_attr.name != attr.name) {
     DB_WARNING << "Key attr name unmatched! given `" << attr.name << "` but got `" << tree->key_attr.name
                << "` from disk";
