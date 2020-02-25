@@ -136,8 +136,7 @@ IXFileHandle::IXFileHandle() {
 IXFileHandle::~IXFileHandle() {
 }
 
-
-BPlusTree * IXFileHandle::getTree(Attribute attr) {
+BPlusTree *IXFileHandle::getTree(Attribute attr) {
   if (!tree) tree = BPlusTree::createTreeOrLoadIfExist(*this, attr);
   return tree.get();
 }
@@ -165,6 +164,7 @@ RC IXFileHandle::openFile(const std::string &fileName) {
 //    DB_WARNING << "failed to open file " << fileName;
     return -1;
   }
+  _file.seekg(0, std::ios::end);
   name = fileName;
   meta_modified_ = false;
   free_pages.clear();
@@ -196,16 +196,18 @@ RC IXFileHandle::closeFile() {
 //    DB_WARNING << "File not opened.";
     return -1;
   }
-
   // flush new counters to metadata
   _file.seekp(0);
-  _file.write((char *) &readPageCounter, sizeof(unsigned));
-  _file.write((char *) &writePageCounter, sizeof(unsigned));
-  _file.write((char *) &appendPageCounter, sizeof(unsigned));
+  char meta_page[PAGE_SIZE];
+  memcpy(meta_page, &readPageCounter, sizeof(unsigned));
+  memcpy(meta_page + 1 * sizeof(unsigned), &writePageCounter, sizeof(unsigned));
+  memcpy(meta_page + 2 * sizeof(unsigned), &appendPageCounter, sizeof(unsigned));
+  _file.write(meta_page, PAGE_SIZE);
 
   // flush pages free space to metadata at tail
-  if (meta_modified_) {
-    int page_num = getNumberOfPages();
+  int page_num = getNumberOfPages();
+  if (meta_modified_ || page_num == 0) {
+
     _file.seekp(getPos(page_num));
     int free_page_nums = free_pages.size();
     _file.write((const char *) (&free_page_nums), sizeof(int));
