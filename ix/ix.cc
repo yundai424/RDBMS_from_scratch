@@ -1,5 +1,6 @@
 #include <sstream>
 #include <set>
+#include <algorithm>
 
 #include "ix.h"
 
@@ -45,7 +46,7 @@ RC IndexManager::deleteEntry(IXFileHandle &ixFileHandle, const Attribute &attrib
     DB_WARNING << "fail to load tree!";
     return -1;
   }
-  Key k(attribute.type, static_cast<const char *>(key), {0, 0});
+  Key k(attribute.type, static_cast<const char *>(key), rid);
   return (!tree->erase(k));
 }
 
@@ -363,7 +364,7 @@ char *IXPage::dataNonConst() {
 
 RC IXPage::dump() {
   if (modify) {
-    DB_INFO << "dump IXPage " << pid;
+//    DB_INFO << "dump IXPage " << pid;
 //    DB_DEBUG << print_bytes(data, 50);
     return file_handle->writePage(pid, data);
   }
@@ -808,7 +809,9 @@ std::shared_ptr<BPlusTree> BPlusTree::createTree(IXFileHandle &file_handle, int 
   auto tree = std::make_shared<BPlusTree>(file_handle);
   if (tree->initTree()) return nullptr;
   tree->key_attr = attr;
-  tree->M = order;
+  tree->M = std::min((int) (PAGE_SIZE / attr.length / 2), 100);
+  DB_DEBUG << tree->M;
+//  tree->M = order;
   tree->modified = true;
   return tree;
 }
@@ -832,8 +835,8 @@ std::shared_ptr<BPlusTree> BPlusTree::loadTreeFromFile(IXFileHandle &file_handle
 
 RC BPlusTree::dumpToFile() {
   if (!modified) return 0;
-  DB_INFO << "dump B+tree of key `" << key_attr.name << "` and root "
-          << (root_ ? std::to_string(root_->getPid()) : "empty");
+//  DB_INFO << "dump B+tree of key `" << key_attr.name << "` and root "
+//          << (root_ ? std::to_string(root_->getPid()) : "empty");
   // dump meta page
   /*******************************************************************
    * 0. `tree meta page` (which will always be the first page

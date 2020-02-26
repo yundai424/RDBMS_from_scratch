@@ -145,6 +145,12 @@ int testCase_11(const std::string &indexFileName, const Attribute &attribute) {
     rc = ix_ScanIterator.close();
     assert(rc == success && "IX_ScanIterator::close() should not fail.");
 
+//    unsigned r = 0;
+//    unsigned w = 0;
+//    unsigned a = 0;
+//    ixFileHandle.collectCounterValues(r, w, a);
+//    std::cout << r << " " << w << " " << a << std::endl;
+
     rc = indexManager.scan(ixFileHandle, attribute, NULL, NULL, true, true, ix_ScanIterator);
     assert(rc == success && "IX_ScanIterator::scan() should not fail.");
 
@@ -179,6 +185,9 @@ int testCase_11(const std::string &indexFileName, const Attribute &attribute) {
     // Close Scan
     rc = ix_ScanIterator.close();
     assert(rc == success && "IX_ScanIterator::close() should not fail.");
+
+//  ixFileHandle.collectCounterValues(r, w, a);
+//  std::cout << r << " " << w << " " << a << std::endl;
 
     // Close Index
     rc = indexManager.closeFile(ixFileHandle);
