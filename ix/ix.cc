@@ -77,8 +77,10 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
   auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
   if (!tree) return -1;
   btree = tree;
+  // for low key, we use RID = {0,0} to workaround range scan (and carefully handle inclusive case)
   low_key = lowKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(lowKey), RID{0, 0}) : nullptr;
-  high_key = highKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(highKey)) : nullptr;
+  // for height key, RID doesn't matter, just set to {0,0} here
+  high_key = highKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(highKey), RID{0,0}) : nullptr;
   low_inclusive = lowKeyInclusive;
   high_inclusive = highKeyInclusive;
   std::pair<Node *, int>
