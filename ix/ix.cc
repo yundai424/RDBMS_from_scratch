@@ -1,7 +1,7 @@
 #include <sstream>
 #include <set>
 #include <algorithm>
-
+#include <assert.h>
 #include "ix.h"
 
 IndexManager &IndexManager::instance() {
