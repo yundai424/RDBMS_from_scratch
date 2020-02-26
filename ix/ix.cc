@@ -362,7 +362,7 @@ char *IXPage::dataNonConst() {
 RC IXPage::dump() {
   if (modify) {
     DB_INFO << "dump IXPage " << pid;
-    DB_DEBUG << print_bytes(data, 50);
+//    DB_DEBUG << print_bytes(data, 50);
     return file_handle->writePage(pid, data);
   }
   return 0;
@@ -455,7 +455,7 @@ void Key::fetchKey(char *dst) const {
   return;
 }
 
-std::string Key::ToString(bool key_val_only) const {
+std::string Key::toString(bool key_val_only) const {
   std::string val_str;
   switch (key_type) {
     case AttrType::TypeInt:val_str = std::to_string(i);
@@ -504,14 +504,16 @@ bool Key::operator<(const Key &rhs) const {
 
 bool Key::operator==(const Key &rhs) const {
   if (rhs.key_type != key_type) throw std::runtime_error("compare different type of key!");
+  bool key_val_equal = true;
   switch (key_type) {
-    case AttrType::TypeInt:return i == rhs.i;
+    case AttrType::TypeInt:key_val_equal = i == rhs.i;
       break;
-    case AttrType::TypeReal:return f == rhs.f;
+    case AttrType::TypeReal:key_val_equal = f == rhs.f;
       break;
-    case AttrType::TypeVarChar: return s == rhs.s;
+    case AttrType::TypeVarChar: key_val_equal = s == rhs.s;
       break;
   }
+  return key_val_equal && page_num == rhs.page_num && slot_num == rhs.slot_num;
   return false;
 }
 
@@ -626,7 +628,7 @@ std::shared_ptr<Node> Node::loadNodeFromPage(BPlusTree *tree_ptr, IXPage *meta_p
 
 RC Node::dumpToPage() {
   if (!modified) return 0;
-  DB_INFO << "dump node " << pid << " with " << entries.size() << " entries " << toString();
+//  DB_INFO << "dump node " << pid << " with " << entries.size() << " entries " << toString();
   // write data page
   int cur_page_idx = -1;
   int free_space = 0;
@@ -709,7 +711,7 @@ std::string Node::toString() const {
   oss << "}\t";
   oss << "[";
   for (int j = 0; j < entries.size(); ++j) {
-    oss << entries[j].first.ToString();
+    oss << entries[j].first.toString();
     if (j != entries.size() - 1) oss << ",";
   }
   oss << "]";
@@ -1222,7 +1224,7 @@ void BPlusTree::printEntries() const {
     for (auto &data : node->entriesConst()) keys.push_back(data.first);
     node = node->getRight();
   }
-  for (auto &k : keys) std::cout << k.ToString() << ", ";
+  for (auto &k : keys) std::cout << k.toString() << ", ";
   std::cout << std::endl;
 }
 

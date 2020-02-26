@@ -56,7 +56,7 @@ int testCase_12(const std::string &indexFileName, const Attribute &attribute) {
     unsigned count = 0;
     while (ix_ScanIterator.getNextEntry(rid, &key) == success) {
         count++;
-
+        DB_DEBUG << rid.pageNum << "," << rid.slotNum;
         if (count % 100 == 0) {
             std::cout << count << " - Returned rid: " << rid.pageNum << " " << rid.slotNum << std::endl;
         }
