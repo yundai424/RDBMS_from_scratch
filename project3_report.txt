@@ -1,35 +1,73 @@
 1. Basic information
-Team #:
-Github Repo Link:
-Student 1 UCI NetID:
-Student 1 Name:
+Team #: 12
+Github Repo Link: https://github.com/UCI-Chenli-teaching/cs222p-winter20-team-12
+Student 1 UCI NetID: yund9
+Student 1 Name: Yun Dai
 Student 2 UCI NetID (if applicable):
 Student 2 Name (if applicable):
 
 
 2. Meta-data page in an index file
 - Show your meta-data page of an index design if you have any. 
+  I have meta-data page for the whole tree and for each node as well. 
+
+  The tree meta page will be the 1st page of the whole index file. The tree meta page encodes following information:
+    1) (int) PID of root node (-1 if root is empty)
+    2) (int) M, order of the tree
+    3) (int) AttrType
+    4) (int + char *) attribute's name
+
+  The node meta page has following information:
+    1) (int) page_type, a binary int value with 0 indicating meta page and 1 indicating real data page
+    2) (int) is_leaf, a binary int value with 0 indicating it's an internal page (non-leaf node) and 1 indicating it's a leaf node
+    3) (int) pid of the node's right sibling
+    4) (int) m, current number of entries of the node
+    5) 2 * M * (int + int + int), position of keys <PID, offset, size> in the node's data page
+    6) (2 * M + 1) * int, PIDs of meta pages of this node's children
 
 
 3. Index Entry Format
 - Show your index entry design (structure). 
+  
+  I use a compositional key manner to deal with duplicate keys, i.e. each index entry not only contains the value of the key itself, but also the PID and SID of the corresponding record. That is, an entry with a TypeInt key age=5 and RID = <1,2> is encoded as "5 1 2" in index file, and an entry with TypeVarChar key name="Yun" and RID <3,4> is encoded as "3 Yun 3 4".
 
 
 4. Page Format
 - Show your internal-page (non-leaf node) design.
 
+  The node data page has following information:
+    1) (int) page_type, a binary int value with 0 indicating meta page and 1 indicating real data page
+    2) real key data (TypeInt, TypeReal or TypeVarChar, followed by PID and SID), pointed by item 5 in node meta page.
+
 - Show your leaf-page (leaf node) design.
+
+  The design of leaf node's data page is just identical to that of internal node. As for meta page, leaf node has the is_leaf flag set to be 1, and leaf node doesn't have item 6, i.e. PIDs of meta pages of its children, as leaf node has no children.
 
 
 5. Implementation Detail
-- Have you added your own source file (.cc or .h)?
+- Have you added your own source file (.cc or .h)? 
+  
+  No
 
-- Have you implemented non-lazy deletion? Choose Yes or No: 
+- Have you implemented non-lazy deletion? Choose Yes or No:
+  
+  Yes
 
-- Have you implemented duplicated key handling that can span multiple pages? Choose Yes or No: 
+- Have you implemented duplicated key handling that can span multiple pages? Choose Yes or No:
+
+  Yes
+
   If yes, please explain briefly how you have implemented this feature.
 
+    As mentioned above, I also encode RID into the index entry. Entries in the tree are in strict (i.e. taking RID into account as well) ascending order and are unique. Each time when we search in the tree, the binary search will also consider RID, and return the exact entry with target key & RID if there's one, or the first entry larger than target if there's no matching entry. When doing scan operation, if there's a low_key boundary, then in the initialization step of scan iterator we will scan for an entry with key = low_key and RID = <0,0>. In this way we can gaurantee that scan will start from the very first entry with the desired key.
+
 - Other implementation details:
+
+  1) For convenience, I abstract Node, Page and BPlusTree as objects, and use shared pointers to manage their life cycles. The tree, nodes (and corresponding pages) will be deserialized from file only when needed, and will be automatically dumped to file each time when they are destructed (basically after each insert/delete operation). During their life cycles, operations will be in-memory, so as to reduce disk I/O. Specifically, a node is represented in memory as a Node object which contains variables indicating its properties (is_leaf, m, right_pid, etc.), deque of its children's PIDs (parsed from meta page), and deque of its entries (parsed from data page using pointers parsed from meta page).
+
+  2) Instead of ignoring the order or tree and splitting/merging node according to the free space of node's page, I assign the B+ tree with constant order computed based on the atrribute's length. The order will be floor(PAGE_SIZE / attribute_length / 2). 
+
+  3) In insert and delete operation, I use iterative method instead of using recursive method demonstrated in pseudocode in textbook. In binary search step, I use a stack to record the path from root to the node to be insert/delete, and iteratively modify nodes in the path when we need to split/merge node.
 
 
 6. Other (optional)
