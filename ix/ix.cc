@@ -45,7 +45,7 @@ RC IndexManager::deleteEntry(IXFileHandle &ixFileHandle, const Attribute &attrib
     DB_WARNING << "fail to load tree!";
     return -1;
   }
-  Key k(attribute.type, static_cast<const char *>(key),  {0, 0});
+  Key k(attribute.type, static_cast<const char *>(key), {0, 0});
   return (!tree->erase(k));
 }
 
@@ -77,7 +77,7 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
   auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
   if (!tree) return -1;
   btree = tree;
-  low_key = lowKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(lowKey)) : nullptr;
+  low_key = lowKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(lowKey), RID{0, 0}) : nullptr;
   high_key = highKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(highKey)) : nullptr;
   low_inclusive = lowKeyInclusive;
   high_inclusive = highKeyInclusive;
@@ -85,11 +85,30 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
       start_position = lowKey ? tree->find(*low_key) : std::pair<Node *, int>{tree->getFirstLeaf(), 0};
   node = start_position.first;
   idx = start_position.second;
-  if (!low_inclusive && node && idx < node->entriesConst().size() && node->entriesConst().at(idx).first == *low_key) {
-    idx++;
+  if (!low_inclusive && low_key) {
+    while (checkCurPos() && node->entriesConst().at(idx).first.cmpKeyVal(*low_key) == 0) {
+      moveNext();
+    }
   }
   init = true;
   return 0;
+}
+
+bool IX_ScanIterator::checkCurPos() {
+  if (node && idx == node->entriesConst().size()) {
+    // reach end of node
+    node = node->getRight();
+    idx = 0;
+  }
+  if (!node) {
+    // reach EOF
+    return false;
+  }
+  return true;
+}
+
+void IX_ScanIterator::moveNext() {
+  ++idx;
 }
 
 RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
@@ -97,11 +116,7 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
     DB_WARNING << "IX_ScanIterator already reach IX_EOF or not initialized";
     return IX_EOF;
   }
-  if (node && idx == node->entriesConst().size()) {
-    node = node->getRight();
-    idx = 0;
-  }
-  if (!node) {
+  if (!checkCurPos()) {
     init = false;
     return IX_EOF;
   }
@@ -110,9 +125,9 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
   if (high_key) {
     bool eof = false;
     if (high_inclusive) {
-      if (*high_key < k) eof = true;
+      if (high_key->cmpKeyVal(k) < 0) eof = true;
     } else {
-      if (*high_key == k || *high_key < k) eof = true;
+      if (high_key->cmpKeyVal(k) <= 0) eof = true;
     }
     if (eof) {
       init = false;
@@ -124,7 +139,8 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
   rid.pageNum = k.page_num;
   rid.slotNum = k.slot_num;
   k.fetchKey(static_cast<char *>(key));
-  ++idx;
+
+  moveNext();
   return 0;
 }
 
@@ -450,17 +466,36 @@ std::string Key::ToString() const {
   return "<" + val_str + "," + std::to_string(page_num) + "," + std::to_string(slot_num) + ">";
 }
 
-bool Key::operator<(const Key &rhs) const {
-  if (rhs.key_type != key_type) throw std::runtime_error("compare different type of key!");
+int Key::cmpKeyVal(const Key &rhs) const {
   switch (key_type) {
-    case AttrType::TypeInt:return i < rhs.i;
+    case AttrType::TypeInt: return i - rhs.i;
       break;
-    case AttrType::TypeReal:return f < rhs.f;
+    case AttrType::TypeReal: {
+      auto tmp = f - rhs.f;
+      if (tmp < 0) return -1;
+      else if (tmp > 0) return 1;
+      else return 0;
+      }
       break;
-    case AttrType::TypeVarChar: return s < rhs.s;
+    case AttrType::TypeVarChar: return s.compare(rhs.s);
       break;
   }
-  return false;
+  return 0;
+}
+
+bool Key::operator<(const Key &rhs) const {
+  if (rhs.key_type != key_type) throw std::runtime_error("compare different type of key!");
+  int res = 0;
+  switch (key_type) {
+    case AttrType::TypeInt:res = i - rhs.i;
+      break;
+    case AttrType::TypeReal:res = f - rhs.f;
+      break;
+    case AttrType::TypeVarChar: res = s.compare(rhs.s);
+      break;
+  }
+  if (res == 0) return std::tie(page_num, slot_num) < std::tie(rhs.page_num, slot_num);
+  else return res < 0 ? true : false;
 }
 
 bool Key::operator==(const Key &rhs) const {
@@ -660,6 +695,7 @@ RC Node::dumpToPage() {
 std::string Node::toString() const {
   std::ostringstream oss;
   oss << "pid " << pid << ":";
+  for (auto c : children_pids) oss << c << ";";
   oss << "[";
   for (int j = 0; j < entries.size(); ++j) {
     oss << entries[j].first.ToString();

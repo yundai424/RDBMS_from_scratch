@@ -76,6 +76,9 @@ class IX_ScanIterator {
   bool low_inclusive;
   bool high_inclusive;
 
+  bool checkCurPos();
+  void moveNext();
+
  public:
   friend class IndexManager;
 
@@ -239,6 +242,8 @@ struct Key {
   void fetchKey(char *dst) const; // write the key val to dst (i, f or s)
 
   std::string ToString() const;
+
+  int cmpKeyVal(const Key & rhs) const;
 
   bool operator<(const Key &rhs) const;
   bool operator==(const Key &rhs) const;
