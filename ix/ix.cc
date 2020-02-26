@@ -60,6 +60,8 @@ RC IndexManager::scan(IXFileHandle &ixFileHandle,
 }
 
 void IndexManager::printBtree(IXFileHandle &ixFileHandle, const Attribute &attribute) const {
+  auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
+  tree->printTree();
 }
 
 IX_ScanIterator::IX_ScanIterator() {
@@ -1229,25 +1231,55 @@ void BPlusTree::printEntries() const {
 }
 
 void BPlusTree::printTree() const {
-  std::deque<Node *> q{root_};
-  while (!q.empty()) {
-    int sz = q.size();
-    for (int i = 0; i < sz; ++i) {
-      Node *node = q.front();
-      q.pop_front();
-      if (!node) {
-        if (i != sz - 1) std::cout << "|\t";
-        continue;
-      }
-      std::cout << node->toString() << "\t";
-      for (int j = 0; j < node->childrenPidsConst().size(); ++j) {
-        q.push_back(node->getChild(j));
-      }
-      if (!node->isLeaf()) q.push_back(nullptr);
-    }
-    std::cout << std::endl;
-  }
+  std::cout << "{" << std::endl;
+  printRecursive(root_);
+  std::cout << "}" << std::endl;
 
+}
+
+void BPlusTree::printRecursive(Node *node) const {
+  if (!node) return;
+  std::cout << "\"keys\":[";
+  bool init = false;
+  auto &entries = node->entriesConst();
+  Key prev_key;
+  if (node->isLeaf()) {
+    for (auto i = 0; i < entries.size(); ++i) {
+      Key key = entries[i].first;
+      if (!init || prev_key.cmpKeyVal(key) != 0) {
+        if (!init) {
+          init = true;
+        }
+        else {
+          std::cout << "]\",";
+        }
+        std::cout << "\"" << key.toString() << ":[";
+        prev_key = key;
+
+      }
+      std::cout << "(" << key.page_num << "," << key.slot_num << ")";
+      if (i == entries.size() - 1) std::cout << "]\"";
+    }
+    std::cout << "]";
+  } else {
+    auto &entries = node->entriesConst();
+    for (int i = 0; i < entries.size(); ++i) {
+      Key key = entries[i].first;
+      std::cout << "\"" << key.toString() << "\"";
+      if (i < entries.size() - 1) std::cout << ",";
+    }
+    std::cout << "]," << std::endl;
+
+    std::cout << "\"children\":[" << std::endl;
+    for (int j = 0; j < node->childrenPidsConst().size(); ++j) {
+      std::cout << "{";
+      printRecursive(node->getChild(j));
+      std::cout << "}";
+      if (j < node->childrenPidsConst().size() - 1) std::cout << ",";
+      std::cout << std::endl;
+    }
+    std::cout << "]";
+  }
 }
 
 BPlusTree::~BPlusTree() {

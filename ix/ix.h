@@ -339,6 +339,8 @@ class BPlusTree {
   std::pair<RC, Node *> getNode(int pid);
   RC deleteNode(int pid);
 
+  void printRecursive(Node *node) const;
+
  public:
 
   /*

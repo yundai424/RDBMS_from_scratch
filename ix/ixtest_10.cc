@@ -72,6 +72,8 @@ int testCase_10(const std::string &indexFileName, const Attribute &attribute) {
     rc = ix_ScanIterator.close();
     assert(rc == success && "IX_ScanIterator::close() should not fail.");
 
+  indexManager.printBtree(ixFileHandle, attribute);
+
     // Close Index
     rc = indexManager.closeFile(ixFileHandle);
     assert(rc == success && "indexManager::closeFile() should not fail.");
