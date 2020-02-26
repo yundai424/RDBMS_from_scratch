@@ -763,12 +763,18 @@ RC BPlusTree::loadFromFile() {
   const char *char_pt = (const char *) pt;
   key_attr.name = std::string(char_pt, char_pt + str_len);
 
-  auto ret2 = getNode(root_pid);
-  if (ret2.first) {
-    DB_WARNING << "failed to load root node";
-    return -1;
+  // load root, root could be empty after delete all entries
+  // we need to distinquish whether root_pid is -1 or get root Node failed
+  if (root_pid == -1) root_ = nullptr;
+  else {
+    auto ret2 = getNode(root_pid);
+    if (ret2.first) {
+      DB_WARNING << "failed to load root node";
+      return -1;
+    }
+    root_ = ret2.second;
   }
-  root_ = ret2.second;
+
   return 0;
 }
 
