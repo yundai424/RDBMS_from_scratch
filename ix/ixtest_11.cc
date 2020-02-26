@@ -37,7 +37,7 @@ int testCase_11(const std::string &indexFileName, const Attribute &attribute) {
         key = i;
         rid.pageNum = key + 1;
         rid.slotNum = (key + 2) % (SHRT_MAX);
-
+//        DB_DEBUG << "**************insert " << key ;
         rc = indexManager.insertEntry(ixFileHandle, attribute, &key, rid);
         assert(rc == success && "indexManager::insertEntry() should not fail.");
         inRecordNum += 1;

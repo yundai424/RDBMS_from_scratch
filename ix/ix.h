@@ -241,7 +241,7 @@ struct Key {
 
   void fetchKey(char *dst) const; // write the key val to dst (i, f or s)
 
-  std::string ToString() const;
+  std::string ToString(bool key_val_only=true) const;
 
   int cmpKeyVal(const Key & rhs) const;
 

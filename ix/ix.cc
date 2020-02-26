@@ -80,7 +80,7 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
   // for low key, we use RID = {0,0} to workaround range scan (and carefully handle inclusive case)
   low_key = lowKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(lowKey), RID{0, 0}) : nullptr;
   // for height key, RID doesn't matter, just set to {0,0} here
-  high_key = highKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(highKey), RID{0,0}) : nullptr;
+  high_key = highKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(highKey), RID{0, 0}) : nullptr;
   low_inclusive = lowKeyInclusive;
   high_inclusive = highKeyInclusive;
   std::pair<Node *, int>
@@ -455,7 +455,7 @@ void Key::fetchKey(char *dst) const {
   return;
 }
 
-std::string Key::ToString() const {
+std::string Key::ToString(bool key_val_only) const {
   std::string val_str;
   switch (key_type) {
     case AttrType::TypeInt:val_str = std::to_string(i);
@@ -465,7 +465,9 @@ std::string Key::ToString() const {
     case AttrType::TypeVarChar: val_str = s;
       break;
   }
-  return "<" + val_str + "," + std::to_string(page_num) + "," + std::to_string(slot_num) + ">";
+  if (key_val_only) return val_str;
+  else
+    return "<" + val_str + "," + std::to_string(page_num) + "," + std::to_string(slot_num) + ">";
 }
 
 int Key::cmpKeyVal(const Key &rhs) const {
@@ -477,7 +479,7 @@ int Key::cmpKeyVal(const Key &rhs) const {
       if (tmp < 0) return -1;
       else if (tmp > 0) return 1;
       else return 0;
-      }
+    }
       break;
     case AttrType::TypeVarChar: return s.compare(rhs.s);
       break;
@@ -531,7 +533,7 @@ Node *Node::getRight() {
 }
 
 Node *Node::getChild(int idx) {
-  return btree->getNode(children_pids[idx]).second;
+  return btree->getNode(children_pids.at(idx)).second;
 }
 
 void Node::setRightPid(int r_pid) {
@@ -624,7 +626,7 @@ std::shared_ptr<Node> Node::loadNodeFromPage(BPlusTree *tree_ptr, IXPage *meta_p
 
 RC Node::dumpToPage() {
   if (!modified) return 0;
-  DB_INFO << "dump node " << pid << " with " << entries.size() << " entries";
+  DB_INFO << "dump node " << pid << " with " << entries.size() << " entries " << toString();
   // write data page
   int cur_page_idx = -1;
   int free_space = 0;
@@ -660,6 +662,12 @@ RC Node::dumpToPage() {
   for (int i = cur_page_idx + 1; i < data_pages.size(); ++i) {
     btree->file_handle_->releasePage(data_pages[i]);
   }
+  data_pages.resize(cur_page_idx + 1);
+//  std::ostringstream oss;
+//  oss << "[";
+//  for (auto p : data_pages) oss << p->pid << ",";
+//  oss << "]";
+//  DB_DEBUG << "data pages:" << oss.str();
   // write meta page
 
   /*******************************************************************
@@ -696,8 +704,9 @@ RC Node::dumpToPage() {
 
 std::string Node::toString() const {
   std::ostringstream oss;
-  oss << "pid " << pid << ":";
+  oss << "pid " << pid << ":{";
   for (auto c : children_pids) oss << c << ";";
+  oss << "}\t";
   oss << "[";
   for (int j = 0; j < entries.size(); ++j) {
     oss << entries[j].first.ToString();
@@ -813,7 +822,8 @@ std::shared_ptr<BPlusTree> BPlusTree::loadTreeFromFile(IXFileHandle &file_handle
 
 RC BPlusTree::dumpToFile() {
   if (!modified) return 0;
-  DB_INFO << "dump B+tree of key `" << key_attr.name << "`";
+  DB_INFO << "dump B+tree of key `" << key_attr.name << "` and root "
+          << (root_ ? std::to_string(root_->getPid()) : "empty");
   // dump meta page
   /*******************************************************************
    * 0. `tree meta page` (which will always be the first page
@@ -889,9 +899,10 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
           // push_up key and split data/children
           new_node_entries.insert(new_node_entries.end(), entries.begin() + M + 1, entries.end());
           entries.resize(M);
-          std::deque<int> &children = cur_node->childrenPidsNonConst();
-          children.insert(children.end(), children.begin() + M + 1, children.end());
-          children.resize(M + 1);
+          std::deque<int> &cur_children = cur_node->childrenPidsNonConst();
+          std::deque<int> &new_children = new_node->childrenPidsNonConst();
+          new_children.insert(new_children.end(), cur_children.begin() + M + 1, cur_children.end());
+          cur_children.resize(M + 1);
         }
         // modify right
         new_node->setRightPid(cur_node->getRightPid());
