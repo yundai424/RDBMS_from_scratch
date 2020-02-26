@@ -465,7 +465,7 @@ std::string Key::toString(bool key_val_only) const {
       break;
     case AttrType::TypeReal:val_str = std::to_string(f);
       break;
-    case AttrType::TypeVarChar: val_str = s;
+    case AttrType::TypeVarChar: val_str = s.size() > 15 ? s.substr(15) : s;
       break;
   }
   if (key_val_only) return val_str;
