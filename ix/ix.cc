@@ -194,6 +194,7 @@ RC IXFileHandle::openFile(const std::string &fileName) {
   mgr = IXFileManager::getMgr(name);
   if (!mgr) return -1;
   else {
+    updateCounter();
     open_ = true;
     return 0;
   }
