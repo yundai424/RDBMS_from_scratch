@@ -59,16 +59,17 @@ class IndexManager {
 class BPlusTree;
 class Node;
 class Key;
+class Context;
 
 class IX_ScanIterator {
  private:
 
   bool init = false;
+  bool closed = true;
 
-  std::shared_ptr<BPlusTree> btree;
+  std::shared_ptr<Context> ctx;
 
-  Node *node;
-  int idx;
+  std::pair<Node *, int> ptr;
 
   std::shared_ptr<Key> low_key;
   std::shared_ptr<Key> high_key;
@@ -102,40 +103,94 @@ class IX_ScanIterator {
   RC close();
 };
 
+/*
+ * LFU cache
+ */
+
+struct FrequencyNode;
+
+struct LFUNode {
+  int key;
+  LFUNode *prev;
+  LFUNode *next;
+  FrequencyNode *freq_node;
+  explicit LFUNode(int k);
+};
+
+struct FrequencyNode {
+  int freq;
+  int size;
+  LFUNode *head;
+  LFUNode *tail;
+  FrequencyNode *next;
+  FrequencyNode *prev;
+  explicit FrequencyNode(int f);
+  ~FrequencyNode();
+
+  void InsertNode(LFUNode *node);
+  void RemoveNode(LFUNode *node);
+};
+
+class LFUCache {
+ private:
+  std::unordered_map<int, LFUNode *> nodes;
+  FrequencyNode *head;
+  FrequencyNode *tail;
+  int cap;
+  int size;
+
+  static void RemoveFreqNode(FrequencyNode *node);
+
+  static void InsertFreqNode(FrequencyNode *prev, FrequencyNode *cur);
+
+  static void IncreaseFreq(LFUNode *node);
+
+ public:
+  explicit LFUCache(int capacity);
+
+  ~LFUCache();
+
+  bool get(int key);
+
+  std::pair<int, bool> put(int key);
+
+};
+
 struct IXPage;
 
 class BPlusTree;
 
-/**
- * first page is meta page store three counters
- *
- * following the last data page are also some other meta pages:
- * first 4 bytes(int) indicate numbers of free pages, followed by page ids
- */
-class IXFileHandle {
-  std::shared_ptr<BPlusTree> tree;
-  std::unordered_map<int, std::shared_ptr<IXPage>> pages;
-  std::unordered_set<int> free_pages; // some pages might be freed after entry deletion
-
-  bool meta_modified_;
- public:
+class IXFileManager {
+  friend class IXFileHandle;
+  static const int LFU_CAP;
 
   // variables to keep counter for each operation
   unsigned readPageCounter;
   unsigned writePageCounter;
   unsigned appendPageCounter;
 
-  // Constructor
-  IXFileHandle();
+  LFUCache lfu;
+  std::unordered_map<int, std::shared_ptr<IXPage>> pages;
+  std::unordered_set<int> free_pages; // some pages might be freed after entry deletion
+  std::fstream _file;
 
-  // Destructor
-  ~IXFileHandle();
+  static inline size_t getPos(PageNum page_num) {
+    return (page_num + 1) * PAGE_SIZE;
+  }
 
-  BPlusTree *getTree(Attribute attr);
-  // Put the current counter values of associated PF FileHandles into variables
-  RC collectCounterValues(unsigned &readPageCount, unsigned &writePageCount, unsigned &appendPageCount);
+  void popOut(int id);
+  RC dumpMeta();
+  RC loadMeta();
+ public:
+  static std::unordered_map<std::string, std::shared_ptr<IXFileManager>> global_map;
+  static IXFileManager *getMgr(const std::string &file);
+  static void removeMgr(const std::string &file);
 
+  bool meta_modified_;
   std::string name;
+
+  IXFileManager(std::string file);
+  ~IXFileManager();
 
   RC readPage(PageNum pageNum, void *data);                           // Get a specific page
   RC writePage(PageNum pageNum, const void *data);                    // Write a specific page
@@ -144,18 +199,49 @@ class IXFileHandle {
 
   std::pair<RC, IXPage *> getPage(int pid);
   std::pair<RC, IXPage *> requestNewPage();
-  RC releasePage(IXPage *page);
+  RC releasePage(int);
+  RC init();
+  // serialization to disk, should be call after each operation
+  RC dumpToFile();
+  RC close();
+
+  void updateFileHandle(IXFileHandle &handle) const;
+
+};
+
+/**
+ * first page is meta page store three counters
+ *
+ * following the last data page are also some other meta pages:
+ * first 4 bytes(int) indicate numbers of free pages, followed by page ids
+ */
+class IXFileHandle {
+
+ public:
+
+  // variables to keep counter for each operation
+  unsigned readPageCounter;
+  unsigned writePageCounter;
+  unsigned appendPageCounter;
+
+  bool open_ = false;
+  std::string name;
+  IXFileManager *mgr;
+
+  // Constructor
+  IXFileHandle();
+
+  // Destructor
+  ~IXFileHandle();
+
+  // Put the current counter values of associated PF FileHandles into variables
+  RC collectCounterValues(unsigned &readPageCount, unsigned &writePageCount, unsigned &appendPageCount);
 
   RC createFile(const std::string &fileName);
   RC openFile(const std::string &fileName);
   RC closeFile();
 
- private:
-  static inline size_t getPos(PageNum page_num) {
-    return (page_num + 1) * PAGE_SIZE;
-  }
-
-  std::fstream _file;
+  RC updateCounter();
 };
 
 /*******************************************************************
@@ -186,6 +272,7 @@ class IXFileHandle {
 
 class IXPage {
  public:
+  friend class IXFileManager;
   friend class IXFileHandle;
   /*
    * for `data page`
@@ -196,16 +283,16 @@ class IXPage {
   bool meta;
   PID pid;
 
-  IXPage(PID page_id, IXFileHandle *handle);
+  IXPage(PID page_id, IXFileManager *mgr);
   const char *dataConst() const;
   char *dataNonConst();
 
   ~IXPage();
 
  private:
-  bool modify;
+  bool dirty;
   char *data;
-  IXFileHandle *file_handle;
+  IXFileManager *file_mgr;
 
   RC dump();
 
@@ -243,7 +330,7 @@ struct Key {
 
   std::string toString(bool key_val_only = true) const;
 
-  int cmpKeyVal(const Key & rhs) const;
+  int cmpKeyVal(const Key &rhs) const;
 
   bool operator<(const Key &rhs) const;
   bool operator==(const Key &rhs) const;
@@ -261,16 +348,16 @@ class Node {
 
   BPlusTree *btree;
 
-  IXPage *meta_page;
-  std::vector<IXPage *> data_pages;
-  bool modified;
+  bool dirty;
   int pid;
+  std::vector<int> data_pages_id;
   bool leaf;
   int right_pid = -1;
   std::deque<int> children_pids;
   std::deque<data_t> entries; // size = children.size() - 1
 
-
+  IXPage *getMetaPage();
+  IXPage *getDataPage(int i);
 
   RC loadFromPage();
  public:
@@ -280,6 +367,7 @@ class Node {
   int getRightPid() const;
   Node *getRight();
   Node *getChild(int idx);
+  const std::vector<int> &dataPagesId() const;
   const std::deque<int> &childrenPidsConst() const;
   const std::deque<data_t> &entriesConst() const;
   // non const, set modified to true
@@ -296,11 +384,11 @@ class Node {
    * construct node using static function instead to avoid confusion.
    * either construct an empty node in memory, and associate it with a page or construct from disk
    */
-  Node(BPlusTree *tree_ptr, IXPage *meta_p);
+  Node(BPlusTree *tree_ptr, int meta_pid);
 
-  static std::shared_ptr<Node> createNode(BPlusTree *tree_ptr, IXPage *meta_p, bool is_leaf);
+  static std::shared_ptr<Node> createNode(BPlusTree *tree_ptr, int meta_pid, bool is_leaf);
 
-  static std::shared_ptr<Node> loadNodeFromPage(BPlusTree *tree_ptr, IXPage *meta_p);
+  static std::shared_ptr<Node> loadNodeFromPage(BPlusTree *tree_ptr, int meta_pid);
 
 };
 
@@ -309,16 +397,20 @@ class BPlusTree {
  private:
   const static int TREE_META_PID;
   const static int DEFAULT_ORDER_M;
+  const static int LFU_CAP;
 
-  static std::unordered_map<std::string, std::shared_ptr<BPlusTree>> global_index_map;
+  static std::unordered_map<std::string, std::shared_ptr<BPlusTree>> global_map;
+
+  LFUCache lfu;
 
   IXPage *meta_page;
   std::unordered_map<int, std::shared_ptr<Node>> nodes_;
   Node *root_;
-  IXFileHandle *file_handle_;
+  IXFileManager *mgr;
   Attribute key_attr;
   bool modified;
   int M; // order, # of key should be in range [M, 2M], and # of children should be [M+1, 2M+1]
+  std::unordered_set<std::pair<Node *, int> *> scan_sentry;
 
   /**
    * DFS helper function to search for key using binary search
@@ -332,12 +424,20 @@ class BPlusTree {
   RC initTree();
   RC loadFromFile();
 
-  static std::shared_ptr<BPlusTree> createTree(IXFileHandle &file_handle, int order, Attribute attr);
-  static std::shared_ptr<BPlusTree> loadTreeFromFile(IXFileHandle &file_handle, Attribute attr);
+  static std::shared_ptr<BPlusTree> createTree(IXFileManager *mgr, int order, Attribute attr);
+  static std::shared_ptr<BPlusTree> loadTreeFromFile(IXFileManager *mgr, Attribute attr);
 
   std::pair<RC, Node *> createNode(bool leaf);
   std::pair<RC, Node *> getNode(int pid);
   RC deleteNode(int pid);
+
+  void sentrySplitToRight(Node *src, Node *dst, int src_begin);
+  void sentryMergeFromRight(Node *left, Node *right, int left_size);
+  void sentryMergeFromLeft(Node *left, Node *right, int left_size);
+  void sentryBorrowFromRight(Node *left, Node *right, int left_size);
+  void sentryBorrowFromLeft(Node *left, Node *right, int left_size);
+  void sentryDeleteEntry(Node *node, int idx);
+  void sentryInsertEntry(Node *node, int idx);
 
   void printRecursive(Node *node) const;
 
@@ -347,9 +447,10 @@ class BPlusTree {
    * do not use ctor directly
    * use static function to create from memory or load from file
    */
-  BPlusTree(IXFileHandle &file_handle);
+  BPlusTree(IXFileManager *mgr);
 
-  static std::shared_ptr<BPlusTree> createTreeOrLoadIfExist(IXFileHandle &file_handle, Attribute attr);
+  static BPlusTree *createTreeOrLoadIfExist(IXFileManager *mgr, const Attribute &attr);
+  static void destroyAllTrees();
 
   int inline MAX_ENTRY() const;
 
@@ -365,7 +466,10 @@ class BPlusTree {
   Node *getFirstLeaf() const;
   RC bulkLoad(std::vector<Node::data_t> entries);
 
-  RC dumpToFile();
+  void registerScan(std::pair<Node *, int> *entry);
+  void unregisterScan(std::pair<Node *, int> *entry);
+
+  RC dumpToMgr();
 
   void printEntries() const;
   void printTree() const;
@@ -377,5 +481,20 @@ class BPlusTree {
 int inline BPlusTree::MAX_ENTRY() const {
   return M * 2;
 }
+
+struct Context {
+  /*
+   * all members' life cycle must be valid during the life cycle of Context
+   */
+
+  static std::pair<RC, std::shared_ptr<Context>> enterCtx(IXFileHandle *file_handle, const Attribute &attr);
+
+  IXFileHandle *file_handle;
+  BPlusTree *btree;
+  IXFileManager *mgr;
+
+  Context(IXFileManager *mgr, IXFileHandle *file_handle, BPlusTree *btree);
+  ~Context();
+};
 
 #endif

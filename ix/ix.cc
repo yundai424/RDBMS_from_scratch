@@ -1,3 +1,5 @@
+#include <utility>
+
 #include <sstream>
 #include <set>
 #include <algorithm>
@@ -31,23 +33,17 @@ RC IndexManager::closeFile(IXFileHandle &ixFileHandle) {
 }
 
 RC IndexManager::insertEntry(IXFileHandle &ixFileHandle, const Attribute &attribute, const void *key, const RID &rid) {
-  auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
-  if (!tree) {
-    DB_WARNING << "fail to load tree!";
-    return -1;
-  }
+  auto ctx = Context::enterCtx(&ixFileHandle, attribute);
+  if (ctx.first) return -1;
   Key k(attribute.type, static_cast<const char *>(key), rid);
-  return tree->insert(k, nullptr);
+  return ctx.second->btree->insert(k, nullptr);
 }
 
 RC IndexManager::deleteEntry(IXFileHandle &ixFileHandle, const Attribute &attribute, const void *key, const RID &rid) {
-  auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
-  if (!tree) {
-    DB_WARNING << "fail to load tree!";
-    return -1;
-  }
+  auto ctx = Context::enterCtx(&ixFileHandle, attribute);
+  if (ctx.first) return -1;
   Key k(attribute.type, static_cast<const char *>(key), rid);
-  return (!tree->erase(k));
+  return (!ctx.second->btree->erase(k));
 }
 
 RC IndexManager::scan(IXFileHandle &ixFileHandle,
@@ -61,14 +57,17 @@ RC IndexManager::scan(IXFileHandle &ixFileHandle,
 }
 
 void IndexManager::printBtree(IXFileHandle &ixFileHandle, const Attribute &attribute) const {
-  auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
-  tree->printTree();
+  auto ctx = Context::enterCtx(&ixFileHandle, attribute);
+  if (ctx.first) return;
+  ctx.second->btree->printTree();
 }
 
 IX_ScanIterator::IX_ScanIterator() {
 }
 
 IX_ScanIterator::~IX_ScanIterator() {
+  // some stupid person hold the ownership but forget to close, not RAII at all :))
+  if (!closed) close();
 }
 
 RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
@@ -77,9 +76,11 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
                                  const void *highKey,
                                  bool lowKeyInclusive,
                                  bool highKeyInclusive) {
-  auto tree = BPlusTree::createTreeOrLoadIfExist(ixFileHandle, attribute);
-  if (!tree) return -1;
-  btree = tree;
+
+  auto ret = Context::enterCtx(&ixFileHandle, attribute);
+  if (ret.first) return -1;
+  ctx = ret.second;
+
   // for low key, we use RID = {0,0} to workaround range scan (and carefully handle inclusive case)
   low_key = lowKey ? std::make_shared<Key>(attribute.type, static_cast<const char *>(lowKey), RID{0, 0}) : nullptr;
   // for height key, RID doesn't matter, just set to {0,0} here
@@ -87,25 +88,27 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
   low_inclusive = lowKeyInclusive;
   high_inclusive = highKeyInclusive;
   std::pair<Node *, int>
-      start_position = lowKey ? tree->find(*low_key) : std::pair<Node *, int>{tree->getFirstLeaf(), 0};
-  node = start_position.first;
-  idx = start_position.second;
+      start_position = lowKey ? ctx->btree->find(*low_key) : std::pair<Node *, int>{ctx->btree->getFirstLeaf(), 0};
+  ptr.first = start_position.first;
+  ptr.second = start_position.second;
   if (!low_inclusive && low_key) {
-    while (checkCurPos() && node->entriesConst().at(idx).first.cmpKeyVal(*low_key) == 0) {
+    while (checkCurPos() && ptr.first->entriesConst().at(ptr.second).first.cmpKeyVal(*low_key) == 0) {
       moveNext();
     }
   }
+  ctx->btree->registerScan(&ptr);
   init = true;
+  closed = false;
   return 0;
 }
 
 bool IX_ScanIterator::checkCurPos() {
-  if (node && idx == node->entriesConst().size()) {
+  if (ptr.first && ptr.second == ptr.first->entriesConst().size()) {
     // reach end of node
-    node = node->getRight();
-    idx = 0;
+    ptr.first = ptr.first->getRight();
+    ptr.second = 0;
   }
-  if (!node) {
+  if (!ptr.first) {
     // reach EOF
     return false;
   }
@@ -113,7 +116,7 @@ bool IX_ScanIterator::checkCurPos() {
 }
 
 void IX_ScanIterator::moveNext() {
-  ++idx;
+  ++ptr.second;
 }
 
 RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
@@ -126,7 +129,7 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
     return IX_EOF;
   }
 
-  Key k = node->entriesConst().at(idx).first;
+  Key k = ptr.first->entriesConst().at(ptr.second).first;
   if (high_key) {
     bool eof = false;
     if (high_inclusive) {
@@ -146,16 +149,18 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
   k.fetchKey(static_cast<char *>(key));
 
   moveNext();
+  ctx->file_handle->updateCounter();
   return 0;
 }
 
 RC IX_ScanIterator::close() {
-  btree = nullptr;
+  ctx->btree->unregisterScan(&ptr);
+  ctx = nullptr;
   init = false;
-  node = nullptr;
-  idx = -1;
+  ptr = {nullptr, -1};
   low_key = nullptr;
   high_key = nullptr;
+  closed = true;
   return 0;
 }
 
@@ -166,11 +171,6 @@ IXFileHandle::IXFileHandle() {
 }
 
 IXFileHandle::~IXFileHandle() {
-}
-
-BPlusTree *IXFileHandle::getTree(Attribute attr) {
-  if (!tree) tree = BPlusTree::createTreeOrLoadIfExist(*this, attr);
-  return tree.get();
 }
 
 RC IXFileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePageCount, unsigned &appendPageCount) {
@@ -186,170 +186,166 @@ RC IXFileHandle::openFile(const std::string &fileName) {
     return -1;
   }
 
-  if (_file.is_open()) {
-    DB_WARNING << "file " << name << "already open!";
+  if (open_) {
+    DB_WARNING << "file " << fileName << "already open!";
     return -1;
   }
-
-  _file.open(fileName, std::ios::in | std::ios::out | std::ios::binary);
-  if (!_file.good()) {
-//    DB_WARNING << "failed to open file " << fileName;
-    return -1;
-  }
-  _file.seekg(0, std::ios::end);
   name = fileName;
-  meta_modified_ = false;
-  free_pages.clear();
-  pages.clear();
-
-  // load counter from metadata
-  _file.seekg(0);
-  _file.read((char *) &readPageCounter, sizeof(unsigned));
-  _file.read((char *) &writePageCounter, sizeof(unsigned));
-  _file.read((char *) &appendPageCounter, sizeof(unsigned));
-
-  // load free space for each page
-  // meta pages store free space are always appended at the end
-  int num_pages = getNumberOfPages();
-  _file.seekg(getPos(num_pages));
-  int free_page_nums;
-  int free_page_id;
-  _file.read((char *) (&free_page_nums), sizeof(int));
-  for (int i = 0; i < free_page_nums; ++i) {
-    _file.read((char *) (char *) (&free_page_id), sizeof(int));
-    free_pages.insert(free_page_id);
+  mgr = IXFileManager::getMgr(name);
+  if (!mgr) return -1;
+  else {
+    open_ = true;
+    return 0;
   }
 
-  return 0;
 }
 
 RC IXFileHandle::closeFile() {
-  if (!_file.is_open()) {
-//    DB_WARNING << "File not opened.";
+  if (!open_) {
+    DB_WARNING << "File not opened.";
     return -1;
   }
-  pages.clear(); // then all pages will destruct and dump to disk
 
-  // flush new counters to metadata
-  _file.seekp(0);
-  char meta_page[PAGE_SIZE];
-  memcpy(meta_page, &readPageCounter, sizeof(unsigned));
-  memcpy(meta_page + 1 * sizeof(unsigned), &writePageCounter, sizeof(unsigned));
-  memcpy(meta_page + 2 * sizeof(unsigned), &appendPageCounter, sizeof(unsigned));
-  _file.write(meta_page, PAGE_SIZE);
+  RC ret = mgr->close();
+  mgr = nullptr;
+  return ret;
+}
 
-  // flush pages free space to metadata at tail
-  int page_num = getNumberOfPages();
-  if (meta_modified_ || page_num == 0) {
-
-    _file.seekp(getPos(page_num));
-    int free_page_nums = free_pages.size();
-    _file.write((const char *) (&free_page_nums), sizeof(int));
-    for (int pid : free_pages) {
-      _file.write((const char *) (&pid), sizeof(int));
-    }
-  }
-
-  _file.close();
+RC IXFileHandle::updateCounter() {
+  if (mgr)
+    mgr->updateFileHandle(*this);
   return 0;
 }
 
 RC IXFileHandle::createFile(const std::string &fileName) {
 
   if (PagedFileManager::ifFileExists(fileName)) {
-//    DB_WARNING << "File " << fileName << " exist!";
     return -1;
   }
 
-  if (_file.is_open())
-    return -1;
-
-  _file.open(fileName, std::ios::out | std::ios::binary);
-  if (!_file.good()) {
-//    DB_WARNING << "failed to create file " << fileName;
+  std::fstream file(fileName, std::ios::out | std::ios::binary);
+  if (!file.good()) {
+    DB_WARNING << "failed to create file " << fileName;
     return -1;
   }
-  // write counters as metadata to head of file
-  return closeFile();
-}
-
-RC IXFileHandle::readPage(PageNum pageNum, void *data) {
-  // pageNum exceed total number of pages
-  if (pageNum >= getNumberOfPages() || !_file.is_open())
-    return -1;
-  _file.seekg(getPos(pageNum));
-  _file.read((char *) data, PAGE_SIZE);
-  readPageCounter++;
+  int init_size = PAGE_SIZE + sizeof(int);
+  char buf[init_size];
+  memset(buf, 0, init_size);
+  file.write(buf, init_size);
+  file.close();
   return 0;
 }
 
-RC IXFileHandle::writePage(PageNum pageNum, const void *data) {
-  if (pageNum >= getNumberOfPages() || !_file.is_open())
-    return -1;
-  meta_modified_ = true;
-  _file.seekp(getPos(pageNum));
-  _file.write((char *) data, PAGE_SIZE);
-  writePageCounter++;
-  return 0;
+LFUNode::LFUNode(int k) : key(k), prev(nullptr), next(nullptr), freq_node(nullptr) {}
+
+FrequencyNode::FrequencyNode(int f) : next(nullptr), prev(nullptr), freq(f), size(0) {
+  head = new LFUNode(-1);
+  tail = new LFUNode(-1);
+  tail->next = head;
+  head->prev = tail;
 }
 
-std::pair<RC, IXPage *> IXFileHandle::appendPage() {
-  if (!_file.is_open()) {
-//    DB_WARNING << "File is not opened!";
-    return {-1, nullptr};
+FrequencyNode::~FrequencyNode() {
+  delete head;
+  delete tail;
+}
+
+void FrequencyNode::InsertNode(LFUNode *node) {
+  head->prev->next = node;
+  node->prev = head->prev;
+  node->next = head;
+  head->prev = node;
+  node->freq_node = this;
+  ++size;
+}
+
+void FrequencyNode::RemoveNode(LFUNode *node) {
+  node->prev->next = node->next;
+  node->next->prev = node->prev;
+  --size;
+}
+
+void LFUCache::RemoveFreqNode(FrequencyNode *node) {
+  node->prev->next = node->next;
+  node->next->prev = node->prev;
+  delete node;
+}
+
+void LFUCache::InsertFreqNode(FrequencyNode *prev, FrequencyNode *cur) {
+  cur->next = prev->next;
+  prev->next->prev = cur;
+  prev->next = cur;
+  cur->prev = prev;
+}
+
+void LFUCache::IncreaseFreq(LFUNode *node) {
+  FrequencyNode *fq_node = node->freq_node;
+  if (fq_node->next->freq != fq_node->freq + 1) {
+    // insert new fq node
+    FrequencyNode *new_fq_node = new FrequencyNode(fq_node->freq + 1);
+    InsertFreqNode(fq_node, new_fq_node);
   }
-  meta_modified_ = true;
-  _file.seekp(getPos(appendPageCounter)); // this will overwrite the tailing meta pages
-  char data[PAGE_SIZE];
-  _file.write((char *) data, PAGE_SIZE);
-
-  std::shared_ptr<IXPage> cur_page = std::make_shared<IXPage>(appendPageCounter++, this);
-  pages[cur_page->pid] = cur_page;
-
-  return {0, cur_page.get()};
+  fq_node->RemoveNode(node);
+  fq_node->next->InsertNode(node);
+  if (fq_node->size == 0)RemoveFreqNode(fq_node);
 }
 
-unsigned IXFileHandle::getNumberOfPages() {
-  return appendPageCounter;
+LFUCache::LFUCache(int capacity) : cap(capacity), size(0) {
+  head = new FrequencyNode(-1);
+  tail = new FrequencyNode(999999);
+  tail->next = head;
+  head->prev = tail;
 }
 
-std::pair<RC, IXPage *> IXFileHandle::getPage(int pid) {
-  if (pid >= getNumberOfPages() || pid < 0) {
-    DB_WARNING << "page id " << pid << " out of range";
-    return {-1, nullptr};
-  }
-  if (!pages.count(pid)) {
-    auto cur_page = std::make_shared<IXPage>(pid, this);
-    readPage(pid, cur_page->data);
-    pages[pid] = cur_page;
-  }
-  return {0, pages[pid].get()};
+LFUCache::~LFUCache() {
+  delete head;
+  delete tail;
 }
 
-std::pair<RC, IXPage *> IXFileHandle::requestNewPage() {
-  if (free_pages.empty()) {
-    return appendPage();
+bool LFUCache::get(int key) {
+  if (!nodes.count(key)) return false;
+  LFUNode *node = nodes[key];
+  IncreaseFreq(node);
+  return true;
+}
+
+std::pair<int, bool> LFUCache::put(int key) {
+  if (nodes.count(key)) {
+    LFUNode *node = nodes[key];
+    IncreaseFreq(node);
+    return {0, false};
   } else {
-    int free_pid = *free_pages.begin();
-    free_pages.erase(free_pid);
-    return getPage(free_pid);
+    std::pair<int, bool> pop_out{0, false};
+    if (size == cap) {
+      // popout
+      LFUNode *to_be_delete = tail->next->tail->next;
+      pop_out = {to_be_delete->key, true};
+      FrequencyNode *fq_node = to_be_delete->freq_node;
+      std::cout << "pop out " << pop_out.first << std::endl;
+      fq_node->RemoveNode(to_be_delete);
+      nodes.erase(to_be_delete->key);
+      delete to_be_delete;
+      if (fq_node->size == 0) RemoveFreqNode(fq_node);
+      --size;
+    }
+    FrequencyNode *fq_node = tail->next;
+    if (fq_node->freq != 1) {
+      FrequencyNode *new_fq_node = new FrequencyNode(1);
+      InsertFreqNode(tail, new_fq_node);
+      fq_node = new_fq_node;
+    }
+    LFUNode *node = new LFUNode(key);
+    nodes[key] = node;
+    ++size;
+    fq_node->InsertNode(node);
+    return pop_out;
   }
-}
-
-RC IXFileHandle::releasePage(IXPage *page) {
-  if (free_pages.count(page->pid)) {
-    DB_WARNING << "page " << page->pid << " already release";
-    return -1;
-  }
-  page->modify = false;
-  free_pages.insert(page->pid);
-  return 0;
 }
 
 const size_t IXPage::MAX_DATA_SIZE = PAGE_SIZE - sizeof(int);
 const size_t IXPage::DEFAULT_DATA_BEGIN = sizeof(int);
 
-IXPage::IXPage(PID page_id, IXFileHandle *handle) : pid(page_id), data(nullptr), modify(false), file_handle(handle) {
+IXPage::IXPage(PID page_id, IXFileManager *mgr) : pid(page_id), data(nullptr), dirty(false), file_mgr(mgr) {
   data = static_cast<char *>(malloc(PAGE_SIZE));
 }
 
@@ -358,15 +354,17 @@ const char *IXPage::dataConst() const {
 }
 
 char *IXPage::dataNonConst() {
-  modify = true;
+  dirty = true;
   return data;
 }
 
 RC IXPage::dump() {
-  if (modify) {
+  if (dirty) {
 //    DB_INFO << "dump IXPage " << pid;
 //    DB_DEBUG << print_bytes(data, 50);
-    return file_handle->writePage(pid, data);
+    RC ret = file_mgr->writePage(pid, data);
+    dirty = false;
+    return ret;
   }
   return 0;
 }
@@ -542,12 +540,16 @@ Node *Node::getChild(int idx) {
 }
 
 void Node::setRightPid(int r_pid) {
-  modified = true;
+  dirty = true;
   right_pid = r_pid;
 }
 
+const std::vector<int> &Node::dataPagesId() const {
+  return data_pages_id;
+}
+
 std::deque<int> &Node::childrenPidsNonConst() {
-  modified = true;
+  dirty = true;
   return children_pids;
 }
 
@@ -556,7 +558,7 @@ const std::deque<int> &Node::childrenPidsConst() const {
 }
 
 std::deque<Node::data_t> &Node::entriesNonConst() {
-  modified = true;
+  dirty = true;
   return entries;
 }
 
@@ -564,8 +566,16 @@ const std::deque<Node::data_t> &Node::entriesConst() const {
   return entries;
 }
 
-Node::Node(BPlusTree *tree_ptr, IXPage *meta_p) : btree(tree_ptr), meta_page(meta_p), pid(meta_p->pid), modified(true) {
+Node::Node(BPlusTree *tree_ptr, int meta_pid) : btree(tree_ptr), pid(meta_pid), dirty(true) {
 
+}
+
+IXPage *Node::getMetaPage() {
+  return btree->mgr->getPage(pid).second;
+}
+
+IXPage *Node::getDataPage(int i) {
+  return btree->mgr->getPage(data_pages_id.at(i)).second;
 }
 
 RC Node::loadFromPage() {
@@ -584,6 +594,7 @@ RC Node::loadFromPage() {
    * following data...
    *
    */
+  IXPage *meta_page = getMetaPage();
   const int *pt = (int *) meta_page->dataConst();
   ++pt;
   leaf = (*pt++) == 1;
@@ -592,18 +603,18 @@ RC Node::loadFromPage() {
   entries.clear();
   // load data entries
   int page_id, offset, size;
-  std::set<IXPage *> data_pages_set;
+  std::set<int> data_pages_set;
   for (int i = 0; i < m; ++i) {
     page_id = *(pt + i * 3 + 0);
     offset = *(pt + i * 3 + 1);
     size = *(pt + i * 3 + 2);
-    auto ret = btree->file_handle_->getPage(page_id);
+    auto ret = btree->mgr->getPage(page_id);
     if (ret.first) return -1;
     IXPage *page = ret.second;
-    data_pages_set.insert(page);
+    data_pages_set.insert(page->pid);
     entries.emplace_back(Key(btree->key_attr.type, page->dataConst() + offset), std::make_shared<Data>(0));
   }
-  data_pages = {data_pages_set.begin(), data_pages_set.end()};
+  data_pages_id = {data_pages_set.begin(), data_pages_set.end()};
   // load children pids
   pt += 2 * btree->M * 3;
   if (!leaf) {
@@ -615,22 +626,22 @@ RC Node::loadFromPage() {
   return 0;
 }
 
-std::shared_ptr<Node> Node::createNode(BPlusTree *tree_ptr, IXPage *meta_p, bool is_leaf) {
-  auto node = std::make_shared<Node>(tree_ptr, meta_p);
+std::shared_ptr<Node> Node::createNode(BPlusTree *tree_ptr, int meta_pid, bool is_leaf) {
+  auto node = std::make_shared<Node>(tree_ptr, meta_pid);
   node->leaf = is_leaf;
-  node->modified = true;
+  node->dirty = true;
   return node;
 }
 
-std::shared_ptr<Node> Node::loadNodeFromPage(BPlusTree *tree_ptr, IXPage *meta_p) {
-  auto node = std::make_shared<Node>(tree_ptr, meta_p);
+std::shared_ptr<Node> Node::loadNodeFromPage(BPlusTree *tree_ptr, int meta_pid) {
+  auto node = std::make_shared<Node>(tree_ptr, meta_pid);
   if (node->loadFromPage()) return nullptr;
-  node->modified = false;
+  node->dirty = false;
   return node;
 }
 
 RC Node::dumpToPage() {
-  if (!modified) return 0;
+  if (!dirty) return 0;
 //  DB_INFO << "dump node " << pid << " with " << entries.size() << " entries " << toString();
   // write data page
   int cur_page_idx = -1;
@@ -645,12 +656,12 @@ RC Node::dumpToPage() {
     if (entry_size > free_space) {
       // next page
       ++cur_page_idx;
-      if (cur_page_idx == data_pages.size()) {
-        auto ret = btree->file_handle_->requestNewPage();
+      if (cur_page_idx == data_pages_id.size()) {
+        auto ret = btree->mgr->requestNewPage();
         if (ret.first) return -1;
-        data_pages.emplace_back(ret.second);
+        data_pages_id.emplace_back(ret.second->pid);
       }
-      IXPage *next_page = data_pages[cur_page_idx];
+      IXPage *next_page = getDataPage(cur_page_idx);
       data_pt = next_page->dataNonConst();
       *((int *) data_pt) = 1; // type1 `data page`
       data_pt += sizeof(int);
@@ -660,14 +671,14 @@ RC Node::dumpToPage() {
     entry.first.dump(data_pt);
     data_pt += entry_size;
     free_space -= entry_size;
-    entry_pos.emplace_back(data_pages[cur_page_idx]->pid, offset, entry_size);
+    entry_pos.emplace_back(getDataPage(cur_page_idx)->pid, offset, entry_size);
     offset += entry_size;
   }
 
-  for (int i = cur_page_idx + 1; i < data_pages.size(); ++i) {
-    btree->file_handle_->releasePage(data_pages[i]);
+  for (int i = cur_page_idx + 1; i < data_pages_id.size(); ++i) {
+    btree->mgr->releasePage(data_pages_id[i]);
   }
-  data_pages.resize(cur_page_idx + 1);
+  data_pages_id.resize(cur_page_idx + 1);
 //  std::ostringstream oss;
 //  oss << "[";
 //  for (auto p : data_pages) oss << p->pid << ",";
@@ -690,6 +701,8 @@ RC Node::dumpToPage() {
    * following data...
    *
    */
+
+  IXPage *meta_page = getMetaPage();
   int *pt = (int *) meta_page->dataNonConst();
   *pt++ = 0; // type0 `meta page`
   *pt++ = leaf ? 1 : 0;
@@ -704,6 +717,7 @@ RC Node::dumpToPage() {
   for (int children_pid : children_pids) {
     *pt++ = children_pid;
   }
+  dirty = false;
   return 0;
 }
 
@@ -723,13 +737,14 @@ std::string Node::toString() const {
 
 const int BPlusTree::TREE_META_PID = 0;
 const int BPlusTree::DEFAULT_ORDER_M = 100;
+const int BPlusTree::LFU_CAP = 200;
 
-std::unordered_map<std::string, std::shared_ptr<BPlusTree>> BPlusTree::global_index_map;
+std::unordered_map<std::string, std::shared_ptr<BPlusTree>> BPlusTree::global_map;
 
-BPlusTree::BPlusTree(IXFileHandle &file_handle) : file_handle_(&file_handle), modified(true), root_(nullptr) {}
+BPlusTree::BPlusTree(IXFileManager *mgr) : mgr(mgr), modified(true), root_(nullptr), lfu(LFU_CAP) {}
 
 RC BPlusTree::initTree() {
-  auto ret = file_handle_->requestNewPage();
+  auto ret = mgr->requestNewPage();
   if (ret.first) {
     DB_WARNING << "Failed to init tree";
     return -1;
@@ -749,7 +764,7 @@ RC BPlusTree::loadFromFile() {
    * varchar attr_name : attr used for index, format is varchar (int + string)
    * ******************************************************************
    */
-  auto ret = file_handle_->getPage(TREE_META_PID);
+  auto ret = mgr->getPage(TREE_META_PID);
   if (ret.first) {
     DB_WARNING << "failed to load B+tree from file";
     return -1;
@@ -783,41 +798,38 @@ RC BPlusTree::loadFromFile() {
   return 0;
 }
 
-std::shared_ptr<BPlusTree> BPlusTree::createTreeOrLoadIfExist(IXFileHandle &file_handle, Attribute attr) {
-//  if (!global_index_map.count(file_handle.name)) {
-//    std::shared_ptr<BPlusTree> tree;
-//    if (file_handle.getNumberOfPages()) {
-//      // exist
-//      tree = loadTreeFromFile(file_handle, attr);
-//    } else {
-//      tree = createTree(file_handle, DEFAULT_ORDER_M, attr);
-//    }
-//    global_index_map[file_handle.name] = tree;
-//  }
-//  return global_index_map[file_handle.name];
-  std::shared_ptr<BPlusTree> tree;
-  if (file_handle.getNumberOfPages()) {
-    // exist
-    tree = loadTreeFromFile(file_handle, attr);
-  } else {
-    tree = createTree(file_handle, DEFAULT_ORDER_M, attr);
+BPlusTree *BPlusTree::createTreeOrLoadIfExist(IXFileManager *mgr, const Attribute &attr) {
+
+  if (!global_map.count(mgr->name)) {
+    std::shared_ptr<BPlusTree> tree;
+    if (mgr->getNumberOfPages()) {
+      // exist
+      tree = loadTreeFromFile(mgr, attr);
+    } else {
+      tree = createTree(mgr, DEFAULT_ORDER_M, attr);
+    }
+    global_map[mgr->name] = tree;
   }
-  return tree;
+  return global_map[mgr->name].get();
 }
 
-std::shared_ptr<BPlusTree> BPlusTree::createTree(IXFileHandle &file_handle, int order, Attribute attr) {
-  auto tree = std::make_shared<BPlusTree>(file_handle);
+void BPlusTree::destroyAllTrees() {
+  global_map.clear();
+}
+
+std::shared_ptr<BPlusTree> BPlusTree::createTree(IXFileManager *mgr, int order, Attribute attr) {
+  auto tree = std::make_shared<BPlusTree>(mgr);
   if (tree->initTree()) return nullptr;
   tree->key_attr = attr;
-  tree->M = std::min((int) (PAGE_SIZE / attr.length / 2), 100);
-  DB_DEBUG << tree->M;
-//  tree->M = order;
+//  tree->M = std::min((int) (PAGE_SIZE / attr.length / 2), 100);
+//  DB_DEBUG << tree->M;
+  tree->M = order;
   tree->modified = true;
   return tree;
 }
 
-std::shared_ptr<BPlusTree> BPlusTree::loadTreeFromFile(IXFileHandle &file_handle, Attribute attr) {
-  auto tree = std::make_shared<BPlusTree>(file_handle);
+std::shared_ptr<BPlusTree> BPlusTree::loadTreeFromFile(IXFileManager *mgr, Attribute attr) {
+  auto tree = std::make_shared<BPlusTree>(mgr);
   if (tree->loadFromFile()) return nullptr;
   if (tree->key_attr.name != attr.name) {
     DB_WARNING << "Key attr name unmatched! given `" << attr.name << "` but got `" << tree->key_attr.name
@@ -833,7 +845,7 @@ std::shared_ptr<BPlusTree> BPlusTree::loadTreeFromFile(IXFileHandle &file_handle
   return tree;
 }
 
-RC BPlusTree::dumpToFile() {
+RC BPlusTree::dumpToMgr() {
   if (!modified) return 0;
 //  DB_INFO << "dump B+tree of key `" << key_attr.name << "` and root "
 //          << (root_ ? std::to_string(root_->getPid()) : "empty");
@@ -846,7 +858,7 @@ RC BPlusTree::dumpToFile() {
    * varchar attr_name : attr used for index, format is varchar (int + string)
    * ******************************************************************
    */
-  auto ret = file_handle_->getPage(TREE_META_PID);
+  auto ret = mgr->getPage(TREE_META_PID);
   if (ret.first) {
     DB_WARNING << "failed to load B+tree from file";
     return -1;
@@ -890,6 +902,7 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
     // create key, insert to entry_idx
     auto &node_entries = node->entriesNonConst();
     node_entries.insert(node_entries.begin() + entry_idx, {key, data});
+    sentryInsertEntry(node, entry_idx);
     if (node_entries.size() > MAX_ENTRY()) {
       // split: [0,M], [M+1, 2M+1], and copy_up/push_up M+1 key to parent, recursively split up
       Node *cur_node = node;
@@ -908,9 +921,11 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
           // copy_up key and split data
           new_node_entries.insert(new_node_entries.end(), entries.begin() + M, entries.end());
           entries.resize(M);
+          sentrySplitToRight(cur_node, new_node, M);
         } else {
           // push_up key and split data/children
           new_node_entries.insert(new_node_entries.end(), entries.begin() + M + 1, entries.end());
+          sentrySplitToRight(cur_node, new_node, M + 1);
           entries.resize(M);
           std::deque<int> &cur_children = cur_node->childrenPidsNonConst();
           std::deque<int> &new_children = new_node->childrenPidsNonConst();
@@ -934,9 +949,9 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
           parent = new_root;
         }
         auto &parent_children = parent->childrenPidsNonConst();
-        auto &parent_entires = parent->entriesNonConst();
+        auto &parent_entries = parent->entriesNonConst();
         parent_children.insert(parent_children.begin() + idx_in_parent + 1, new_node->getPid());
-        parent_entires.insert(parent_entires.begin() + idx_in_parent, {mid_key, nullptr});
+        parent_entries.insert(parent_entries.begin() + idx_in_parent, {mid_key, nullptr});
         cur_node = parent;
       }
     }
@@ -953,6 +968,7 @@ bool BPlusTree::erase(const Key &key) {
   Node *node = path.back().first;
   int idx = res.first;
   node->entriesNonConst().erase(node->entriesNonConst().begin() + idx);
+  sentryDeleteEntry(node, idx);
   while (node != root_ && node->entriesConst().size() < M) {
     // borrow from sibling or merge
     int idx_in_parent = path.back().second;
@@ -975,8 +991,10 @@ bool BPlusTree::erase(const Key &key) {
     if (borrow_from_right) {
       if (right->entriesConst().size() > M) {
         if (node->isLeaf()) {
+          sentryBorrowFromRight(left, right, left->entriesConst().size());
           left->entriesNonConst().push_back(right->entriesConst().front());
           right->entriesNonConst().pop_front();
+          sentryDeleteEntry(right, 0);
           parent->entriesNonConst()[left_idx] = {right->entriesConst().front().first, nullptr};
         } else {
           left->childrenPidsNonConst().push_back(right->childrenPidsConst().front());
@@ -984,12 +1002,15 @@ bool BPlusTree::erase(const Key &key) {
           left->entriesNonConst().push_back(parent->entriesConst().at(left_idx));
           parent->entriesNonConst()[left_idx] = right->entriesConst().front();
           right->entriesNonConst().pop_front();
+          sentryDeleteEntry(right, 0);
         }
       } else
         merge = true;
     } else {
+      // borrow from left
       if (left->entriesConst().size() > M) {
         if (node->isLeaf()) {
+          sentryBorrowFromLeft(left, right, left->entriesConst().size());
           right->entriesNonConst().push_front(left->entriesConst().back());
           left->entriesNonConst().pop_back();
           parent->entriesNonConst()[left_idx] = {right->entriesConst().front().first, nullptr};
@@ -1012,9 +1033,10 @@ bool BPlusTree::erase(const Key &key) {
         const auto &right_children_c = right->childrenPidsConst();
         left_children_nc.insert(left_children_nc.end(), right_children_c.begin(), right_children_c.end());
       }
+      sentryMergeFromRight(left, right, left->entriesConst().size());
       auto &left_entries_nc = left->entriesNonConst();
-      const auto &right_entires_c = right->entriesConst();
-      left_entries_nc.insert(left_entries_nc.end(), right_entires_c.begin(), right_entires_c.end());
+      const auto &right_entries_c = right->entriesConst();
+      left_entries_nc.insert(left_entries_nc.end(), right_entries_c.begin(), right_entries_c.end());
 
       left->setRightPid(right->getRightPid());
       deleteNode(right->getPid());
@@ -1145,6 +1167,19 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
   return 0;
 }
 
+void BPlusTree::registerScan(std::pair<Node *, int> *entry) {
+  if (scan_sentry.count(entry))
+    DB_WARNING << "scan entry " << entry->first->getPid() << "," << entry->second << " exist";
+  scan_sentry.insert(entry);
+}
+
+void BPlusTree::unregisterScan(std::pair<Node *, int> *entry) {
+  if (scan_sentry.count(entry)) {
+    scan_sentry.erase(entry);
+  } else
+    DB_WARNING << "scan entry " << entry->first->getPid() << "," << entry->second << " not exist";
+}
+
 std::pair<int, bool> BPlusTree::search(Key key, std::vector<std::pair<Node *, int>> &path) {
   // binary search
   Node *node = path.back().first;
@@ -1187,25 +1222,25 @@ std::pair<int, bool> BPlusTree::search(Key key, std::vector<std::pair<Node *, in
 }
 
 std::pair<RC, Node *> BPlusTree::createNode(bool leaf) {
-  auto ret = file_handle_->requestNewPage();
+  auto ret = mgr->requestNewPage();
   if (ret.first) {
     DB_WARNING << "failed to request new page";
     return {-1, nullptr};
   }
   IXPage *new_page = ret.second;
-  std::shared_ptr<Node> new_node = Node::createNode(this, new_page, leaf);
+  std::shared_ptr<Node> new_node = Node::createNode(this, ret.second->pid, leaf);
   nodes_[new_page->pid] = new_node;
   return {0, new_node.get()};
 }
 
 std::pair<RC, Node *> BPlusTree::getNode(int pid) {
   if (!nodes_.count(pid)) {
-    auto ret = file_handle_->getPage(pid);
+    auto ret = mgr->getPage(pid);
     if (ret.first) {
       DB_WARNING << "failed to get page " << pid;
       return {-1, nullptr};
     }
-    nodes_[pid] = Node::loadNodeFromPage(this, ret.second);
+    nodes_[pid] = Node::loadNodeFromPage(this, ret.second->pid);
   }
   return {0, nodes_[pid].get()};
 }
@@ -1215,7 +1250,88 @@ RC BPlusTree::deleteNode(int pid) {
     DB_WARNING << "deleteNode failed! pid " << pid << " not exist!";
     return -1;
   }
+//  Node *node = nodes_[pid].get();
+//  if (mgr->releasePage(node->getPid())) return -1;
+//  for (int data_pid : node->dataPagesId())
+//    if (mgr->releasePage(data_pid)) return -1;
   return 0;
+}
+
+void BPlusTree::sentrySplitToRight(Node *src, Node *dst, int src_begin) {
+  if (!src->isLeaf()) return;
+  for (auto &pair:scan_sentry) {
+    if (pair->first != src) continue;
+    if (pair->second < src_begin) continue;
+    // move to dst node
+    int offset = pair->second - src_begin;
+    pair->first = dst;
+    pair->second = offset;
+
+  }
+}
+
+void BPlusTree::sentryMergeFromRight(Node *left, Node *right, int left_size) {
+  if (!left->isLeaf()) return;
+  for (auto &pair:scan_sentry) {
+    if (pair->first == right) {
+      *pair = {left, left_size + pair->second};
+    }
+  }
+}
+
+void BPlusTree::sentryMergeFromLeft(Node *left, Node *right, int left_size) {
+  if (!left->isLeaf()) return;
+  for (auto &pair:scan_sentry) {
+    if (pair->first == right) {
+      pair->second += left_size;
+    } else if (pair->first == left) {
+      *pair = {right, pair->second};
+    }
+  }
+}
+
+void BPlusTree::sentryBorrowFromRight(Node *left, Node *right, int left_size) {
+  if (!left->isLeaf()) return;
+  for (auto &pair:scan_sentry) {
+    if (pair->first == right) {
+      if (pair->second == 0) {
+        *pair = {left, left_size};
+      } else {
+        pair->second--;
+      }
+    }
+  }
+}
+
+void BPlusTree::sentryBorrowFromLeft(Node *left, Node *right, int left_size) {
+  if (!left->isLeaf()) return;
+  for (auto &pair:scan_sentry) {
+    if (pair->first == right) {
+      pair->second++;
+    } else if (pair->first == left && pair->second == left_size - 1) {
+      *pair = {right, 0};
+    }
+  }
+}
+
+void BPlusTree::sentryDeleteEntry(Node *node, int idx) {
+  if (!node->isLeaf()) return;
+  for (auto &pair:scan_sentry) {
+    if (pair->first != node) continue;
+    if (pair->second <= idx) continue;
+    // shift left
+    pair->second--;
+  }
+}
+
+void BPlusTree::sentryInsertEntry(Node *node, int idx) {
+  if (!node->isLeaf()) return;
+  for (auto &pair:scan_sentry) {
+    if (pair->first != node) continue;
+    if (pair->second < idx) continue;
+    // shift right
+    pair->second++;
+  }
 }
 
 void BPlusTree::printEntries() const {
@@ -1252,8 +1368,7 @@ void BPlusTree::printRecursive(Node *node) const {
       if (!init || prev_key.cmpKeyVal(key) != 0) {
         if (!init) {
           init = true;
-        }
-        else {
+        } else {
           std::cout << "]\",";
         }
         std::cout << "\"" << key.toString() << ":[";
@@ -1286,6 +1401,232 @@ void BPlusTree::printRecursive(Node *node) const {
 }
 
 BPlusTree::~BPlusTree() {
-  dumpToFile();
 }
 
+const int IXFileManager::LFU_CAP = 10000; // 10000 page, which is 40MB
+std::unordered_map<std::string, std::shared_ptr<IXFileManager>> IXFileManager::global_map;
+
+IXFileManager *IXFileManager::getMgr(const std::string &file) {
+  if (!global_map.count(file)) {
+    auto mgr = std::make_shared<IXFileManager>(file);
+    if (mgr->init()) return nullptr;
+    global_map[file] = mgr;
+  }
+  return global_map[file].get();
+}
+
+void IXFileManager::removeMgr(const std::string &file) {
+  if (global_map.count(file)) global_map.erase(file);
+}
+
+RC IXFileManager::init() {
+  if (!PagedFileManager::ifFileExists(name)) {
+    DB_WARNING << "try to open non-exist file " << name;
+    return -1;
+  }
+
+  if (_file.is_open()) {
+    DB_WARNING << "file " << name << "already open!";
+    return -1;
+  }
+
+  _file.open(name, std::ios::in | std::ios::out | std::ios::binary);
+  if (!_file.good()) {
+//    DB_WARNING << "failed to open file " << fileName;
+    return -1;
+  }
+  return loadMeta();
+}
+
+IXFileManager::IXFileManager(std::string file) : name(std::move(file)), lfu(LFU_CAP) {
+
+}
+
+IXFileManager::~IXFileManager() {
+  if (_file.is_open()) _file.close();
+}
+
+void IXFileManager::popOut(int id) {
+//  pages[id]->dump();
+  pages.erase(id);
+  if (free_pages.count(id))
+    free_pages.erase(id);
+}
+
+RC IXFileManager::readPage(PageNum pageNum, void *data) {
+  // pageNum exceed total number of pages
+  if (pageNum >= getNumberOfPages() || !_file.is_open())
+    return -1;
+  _file.seekg(getPos(pageNum));
+  _file.read((char *) data, PAGE_SIZE);
+  readPageCounter++;
+  return 0;
+}
+RC IXFileManager::writePage(PageNum pageNum, const void *data) {
+  if (pageNum >= getNumberOfPages() || !_file.is_open())
+    return -1;
+  meta_modified_ = true;
+  _file.seekp(getPos(pageNum));
+  _file.write((char *) data, PAGE_SIZE);
+  writePageCounter++;
+  return 0;
+}
+std::pair<RC, IXPage *> IXFileManager::appendPage() {
+  if (!_file.is_open()) {
+//    DB_WARNING << "File is not opened!";
+    return {-1, nullptr};
+  }
+  meta_modified_ = true;
+  _file.seekp(getPos(appendPageCounter)); // this will overwrite the tailing meta pages
+  char data[PAGE_SIZE];
+  _file.write((char *) data, PAGE_SIZE);
+
+  std::shared_ptr<IXPage> cur_page = std::make_shared<IXPage>(appendPageCounter++, this);
+  pages[cur_page->pid] = cur_page;
+
+  return {0, cur_page.get()};
+}
+
+unsigned IXFileManager::getNumberOfPages() {
+  return appendPageCounter;
+}
+
+std::pair<RC, IXPage *> IXFileManager::getPage(int pid) {
+  if (pid >= getNumberOfPages() || pid < 0) {
+    DB_WARNING << "page id " << pid << " out of range";
+    return {-1, nullptr};
+  }
+  if (!lfu.get(pid)) {
+    auto pop_out = lfu.put(pid);
+    if (pop_out.second) {
+      // pop out
+      popOut(pop_out.first);
+    }
+    auto cur_page = std::make_shared<IXPage>(pid, this);
+    readPage(pid, cur_page->data);
+    pages[pid] = cur_page;
+  }
+  return {0, pages[pid].get()};
+}
+
+std::pair<RC, IXPage *> IXFileManager::requestNewPage() {
+  std::pair<RC, IXPage *> ret{0, nullptr};
+  if (free_pages.empty()) {
+    ret = appendPage();
+  } else {
+    int free_pid = *free_pages.begin();
+    free_pages.erase(free_pid);
+    ret = getPage(free_pid);
+  }
+  if (ret.first) {
+    DB_WARNING << "Request new page failed";
+    return ret;
+  }
+  auto pop_out = lfu.put(ret.second->pid);
+  if (pop_out.second) {
+    popOut(pop_out.first);
+  }
+  return ret;
+}
+
+RC IXFileManager::releasePage(int pid) {
+  if (free_pages.count(pid)) {
+    DB_WARNING << "page " << pid << " already release";
+    return -1;
+  }
+  if (pages.count(pid)) pages[pid]->dirty = false;
+  free_pages.insert(pid);
+  return 0;
+}
+
+RC IXFileManager::dumpToFile() {
+  for (auto &p : pages) {
+    if (p.second->dump()) return -1;
+  }
+  return dumpMeta();
+}
+
+RC IXFileManager::close() {
+  // lalala I just do nothing, come on and get me :))))
+  return 0;
+}
+
+RC IXFileManager::loadMeta() {
+  _file.seekg(0, std::ios::end);
+  meta_modified_ = false;
+  free_pages.clear();
+  pages.clear();
+
+  // load counter from metadata
+  _file.seekg(0);
+  _file.read((char *) &readPageCounter, sizeof(unsigned));
+  _file.read((char *) &writePageCounter, sizeof(unsigned));
+  _file.read((char *) &appendPageCounter, sizeof(unsigned));
+
+  // load free space for each page
+  // meta pages store free space are always appended at the end
+  int num_pages = getNumberOfPages();
+  _file.seekg(getPos(num_pages));
+  int free_page_nums;
+  int free_page_id;
+  _file.read((char *) (&free_page_nums), sizeof(int));
+  for (int i = 0; i < free_page_nums; ++i) {
+    _file.read((char *) (char *) (&free_page_id), sizeof(int));
+    free_pages.insert(free_page_id);
+  }
+  return 0;
+}
+
+RC IXFileManager::dumpMeta() {
+
+  // flush new counters to metadata
+  _file.seekp(0);
+  char meta_page[PAGE_SIZE];
+  memcpy(meta_page, &readPageCounter, sizeof(unsigned));
+  memcpy(meta_page + 1 * sizeof(unsigned), &writePageCounter, sizeof(unsigned));
+  memcpy(meta_page + 2 * sizeof(unsigned), &appendPageCounter, sizeof(unsigned));
+  _file.write(meta_page, PAGE_SIZE);
+
+  // flush pages free space to metadata at tail
+  int page_num = getNumberOfPages();
+
+  if (meta_modified_ || page_num == 0) {
+
+    _file.seekp(getPos(page_num));
+    int free_page_nums = free_pages.size();
+    _file.write((const char *) (&free_page_nums), sizeof(int));
+    for (int pid : free_pages) {
+      _file.write((const char *) (&pid), sizeof(int));
+    }
+  }
+  return 0;
+}
+
+void IXFileManager::updateFileHandle(IXFileHandle &handle) const {
+  handle.readPageCounter = this->readPageCounter;
+  handle.writePageCounter = this->writePageCounter;
+  handle.appendPageCounter = this->appendPageCounter;
+
+}
+
+std::pair<RC, std::shared_ptr<Context>> Context::enterCtx(IXFileHandle *file_handle, const Attribute &attr) {
+  IXFileManager *mgr = file_handle->mgr;
+  if (!mgr) return {-1, nullptr};
+  BPlusTree *tree = BPlusTree::createTreeOrLoadIfExist(mgr, attr);
+  if (!tree) {
+    DB_WARNING << "fail to load tree!";
+    return {-1, nullptr};
+  }
+  return {0, std::make_shared<Context>(mgr, file_handle, tree)};
+
+}
+
+Context::Context(IXFileManager *mgr, IXFileHandle *file_handle, BPlusTree *btree)
+    : mgr(mgr), file_handle(file_handle), btree(btree) {}
+
+Context::~Context() {
+  //TODO
+  file_handle->updateCounter();
+  btree->dumpToMgr();
+  mgr->dumpToFile();
+}
