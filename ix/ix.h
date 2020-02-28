@@ -69,7 +69,7 @@ class IX_ScanIterator {
 
   std::shared_ptr<Context> ctx;
 
-  std::pair<Node *, int> ptr;
+  std::pair<int, int> ptr; // node_pid, entry_idx
 
   std::shared_ptr<Key> low_key;
   std::shared_ptr<Key> high_key;
@@ -99,6 +99,8 @@ class IX_ScanIterator {
   // Get next matching entry
   RC getNextEntry(RID &rid, void *key);
 
+  Node *cur_node();
+
   // Terminate index scan
   RC close();
 };
@@ -120,7 +122,7 @@ struct LFUNode {
 struct FrequencyNode {
   int freq;
   int size;
-  LFUNode *head;
+  LFUNode *head; // most recent
   LFUNode *tail;
   FrequencyNode *next;
   FrequencyNode *prev;
@@ -129,13 +131,15 @@ struct FrequencyNode {
 
   void InsertNode(LFUNode *node);
   void RemoveNode(LFUNode *node);
+  std::vector<LFUNode*> RemoveUnrecent(int max_num);
 };
 
 class LFUCache {
  private:
   std::unordered_map<int, LFUNode *> nodes;
-  FrequencyNode *head;
-  FrequencyNode *tail;
+  std::unordered_set<int> lazy_popout;
+  FrequencyNode *head; // most frequent
+  FrequencyNode *tail; // most in-frequent
   int cap;
   int size;
 
@@ -152,7 +156,11 @@ class LFUCache {
 
   bool get(int key);
 
-  std::pair<int, bool> put(int key);
+  void erase(int key);
+
+  std::pair<int, bool> put(int key, bool lazy_popout = false);
+
+  std::vector<int> lazyPopout();
 
 };
 
@@ -342,9 +350,8 @@ class Node {
 
  public:
   typedef std::pair<Key, std::shared_ptr<Data>> data_t; // for index node, Data will be nullptr
-
- private:
   static const int INVALID_PID;
+ private:
 
   BPlusTree *btree;
 
@@ -386,6 +393,8 @@ class Node {
    */
   Node(BPlusTree *tree_ptr, int meta_pid);
 
+  ~Node();
+
   static std::shared_ptr<Node> createNode(BPlusTree *tree_ptr, int meta_pid, bool is_leaf);
 
   static std::shared_ptr<Node> loadNodeFromPage(BPlusTree *tree_ptr, int meta_pid);
@@ -394,6 +403,7 @@ class Node {
 
 class BPlusTree {
   friend class Node;
+  friend class IX_ScanIterator;
  private:
   const static int TREE_META_PID;
   const static int DEFAULT_ORDER_M;
@@ -405,12 +415,12 @@ class BPlusTree {
 
   IXPage *meta_page;
   std::unordered_map<int, std::shared_ptr<Node>> nodes_;
-  Node *root_;
+  int root_pid;
   IXFileManager *mgr;
   Attribute key_attr;
   bool modified;
   int M; // order, # of key should be in range [M, 2M], and # of children should be [M+1, 2M+1]
-  std::unordered_set<std::pair<Node *, int> *> scan_sentry;
+  std::unordered_set<std::pair<int, int> *> scan_sentry;
 
   /**
    * DFS helper function to search for key using binary search
@@ -426,6 +436,10 @@ class BPlusTree {
 
   static std::shared_ptr<BPlusTree> createTree(IXFileManager *mgr, int order, Attribute attr);
   static std::shared_ptr<BPlusTree> loadTreeFromFile(IXFileManager *mgr, Attribute attr);
+
+  void popOut(int pid);
+
+  Node *root();
 
   std::pair<RC, Node *> createNode(bool leaf);
   std::pair<RC, Node *> getNode(int pid);
@@ -457,22 +471,24 @@ class BPlusTree {
   RC insert(const Key &key, std::shared_ptr<Data> data = nullptr);
   bool erase(const Key &key);
   bool contains(const Key &key);
+  void popoutFromCache();
+
   /**
    *
    * @param key
    * @return Node and idx point to key if exactly matched, otherwise idx point to the first element greater than key
    */
   std::pair<Node *, int> find(const Key &key);
-  Node *getFirstLeaf() const;
+  Node *getFirstLeaf();
   RC bulkLoad(std::vector<Node::data_t> entries);
 
-  void registerScan(std::pair<Node *, int> *entry);
-  void unregisterScan(std::pair<Node *, int> *entry);
+  void registerScan(std::pair<int, int> *entry);
+  void unregisterScan(std::pair<int, int> *entry);
 
   RC dumpToMgr();
 
-  void printEntries() const;
-  void printTree() const;
+  void printEntries();
+  void printTree();
 
   ~BPlusTree();
 

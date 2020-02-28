@@ -89,10 +89,11 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
   high_inclusive = highKeyInclusive;
   std::pair<Node *, int>
       start_position = lowKey ? ctx->btree->find(*low_key) : std::pair<Node *, int>{ctx->btree->getFirstLeaf(), 0};
-  ptr.first = start_position.first;
+
+  ptr.first = start_position.first ? start_position.first->getPid() : Node::INVALID_PID;
   ptr.second = start_position.second;
   if (!low_inclusive && low_key) {
-    while (checkCurPos() && ptr.first->entriesConst().at(ptr.second).first.cmpKeyVal(*low_key) == 0) {
+    while (checkCurPos() && cur_node()->entriesConst().at(ptr.second).first.cmpKeyVal(*low_key) == 0) {
       moveNext();
     }
   }
@@ -103,12 +104,13 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
 }
 
 bool IX_ScanIterator::checkCurPos() {
-  if (ptr.first && ptr.second == ptr.first->entriesConst().size()) {
+  if (cur_node() && ptr.second == cur_node()->entriesConst().size()) {
     // reach end of node
-    ptr.first = ptr.first->getRight();
+    auto right = cur_node()->getRight();
+    ptr.first = right ? right->getPid() : Node::INVALID_PID;
     ptr.second = 0;
   }
-  if (!ptr.first) {
+  if (ptr.first == Node::INVALID_PID) {
     // reach EOF
     return false;
   }
@@ -117,6 +119,10 @@ bool IX_ScanIterator::checkCurPos() {
 
 void IX_ScanIterator::moveNext() {
   ++ptr.second;
+}
+
+Node *IX_ScanIterator::cur_node() {
+  return ctx->btree->getNode(ptr.first).second;
 }
 
 RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
@@ -129,7 +135,7 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
     return IX_EOF;
   }
 
-  Key k = ptr.first->entriesConst().at(ptr.second).first;
+  Key k = cur_node()->entriesConst().at(ptr.second).first;
   if (high_key) {
     bool eof = false;
     if (high_inclusive) {
@@ -157,7 +163,7 @@ RC IX_ScanIterator::close() {
   ctx->btree->unregisterScan(&ptr);
   ctx = nullptr;
   init = false;
-  ptr = {nullptr, -1};
+  ptr = {Node::INVALID_PID, -1};
   low_key = nullptr;
   high_key = nullptr;
   closed = true;
@@ -266,6 +272,19 @@ void FrequencyNode::RemoveNode(LFUNode *node) {
   --size;
 }
 
+std::vector<LFUNode *> FrequencyNode::RemoveUnrecent(int max_num) {
+  std::vector<LFUNode *> res;
+  LFUNode *node = tail->next;
+  for (int i = 0; i < std::min(max_num, size); ++i) {
+    res.push_back(node);
+    node = node->next;
+  }
+  size -= res.size();
+  node->prev = tail;
+  tail->next = node;
+  return res;
+}
+
 void LFUCache::RemoveFreqNode(FrequencyNode *node) {
   node->prev->next = node->next;
   node->next->prev = node->prev;
@@ -287,13 +306,13 @@ void LFUCache::IncreaseFreq(LFUNode *node) {
     InsertFreqNode(fq_node, new_fq_node);
   }
   fq_node->RemoveNode(node);
-  fq_node->next->InsertNode(node);
-  if (fq_node->size == 0)RemoveFreqNode(fq_node);
+  fq_node->next->InsertNode(node); // increase freq by 1
+  if (fq_node->size == 0) RemoveFreqNode(fq_node);
 }
 
 LFUCache::LFUCache(int capacity) : cap(capacity), size(0) {
-  head = new FrequencyNode(-1);
-  tail = new FrequencyNode(999999);
+  head = new FrequencyNode(99999999);
+  tail = new FrequencyNode(-1);
   tail->next = head;
   head->prev = tail;
 }
@@ -310,16 +329,28 @@ bool LFUCache::get(int key) {
   return true;
 }
 
-std::pair<int, bool> LFUCache::put(int key) {
+void LFUCache::erase(int key) {
+  if (!nodes.count(key)) return;
+  LFUNode *node = nodes[key];
+  nodes.erase(key);
+  FrequencyNode *fq_node = node->freq_node;
+  fq_node->RemoveNode(node);
+  if (fq_node->size == 0) RemoveFreqNode(fq_node);
+  delete node;
+}
+
+std::pair<int, bool> LFUCache::put(int key, bool lazy_pop_out) {
   if (nodes.count(key)) {
     LFUNode *node = nodes[key];
     IncreaseFreq(node);
     return {0, false};
   } else {
     std::pair<int, bool> pop_out{0, false};
-    if (size == cap) {
+    if (size >= cap && !lazy_pop_out) {
       // popout
       LFUNode *to_be_delete = tail->next->tail->next;
+      if (lazy_pop_out)
+        lazy_popout.insert(to_be_delete->key);
       pop_out = {to_be_delete->key, true};
       FrequencyNode *fq_node = to_be_delete->freq_node;
       std::cout << "pop out " << pop_out.first << std::endl;
@@ -341,6 +372,42 @@ std::pair<int, bool> LFUCache::put(int key) {
     fq_node->InsertNode(node);
     return pop_out;
   }
+}
+
+std::vector<int> LFUCache::lazyPopout() {
+  if (size <= cap) return {};
+//  DB_WARNING << size << "," << cap;
+//  FrequencyNode * fuck = tail;
+//  while(fuck) {
+//    std::cout << "[" << fuck->freq << "," << fuck->size << "]" << ",";
+//    fuck = fuck->next;
+//  }
+//  std::cout << std::endl;
+  std::vector<int> res;
+  FrequencyNode *fq_node = tail->next;
+  int remain = size - cap;
+  while (remain > 0) {
+    std::vector<LFUNode *> popout = fq_node->RemoveUnrecent(remain);
+    remain -= popout.size();
+    for (auto *nd : popout) {
+      nodes.erase(nd->key);
+      res.push_back(nd->key);
+      delete nd;
+    }
+    FrequencyNode *tmp = fq_node;
+    fq_node = fq_node->next;
+    if (tmp->size == 0) {
+      RemoveFreqNode(tmp);
+    }
+  }
+//  fuck = tail;
+//  while(fuck) {
+//    std::cout << "[" << fuck->freq << "," << fuck->size << "]" << ",";
+//    fuck = fuck->next;
+//  }
+//  std::cout << std::endl;
+  size = cap;
+  return res;
 }
 
 const size_t IXPage::MAX_DATA_SIZE = PAGE_SIZE - sizeof(int);
@@ -465,6 +532,7 @@ std::string Key::toString(bool key_val_only) const {
     case AttrType::TypeReal:val_str = std::to_string(f);
       break;
     case AttrType::TypeVarChar: val_str = s;
+//      val_str = s.size() > 15 ? s.substr(15) : s;
       break;
   }
   if (key_val_only) return val_str;
@@ -569,6 +637,10 @@ const std::deque<Node::data_t> &Node::entriesConst() const {
 
 Node::Node(BPlusTree *tree_ptr, int meta_pid) : btree(tree_ptr), pid(meta_pid), dirty(true) {
 
+}
+
+Node::~Node() {
+  dumpToPage();
 }
 
 IXPage *Node::getMetaPage() {
@@ -738,11 +810,11 @@ std::string Node::toString() const {
 
 const int BPlusTree::TREE_META_PID = 0;
 const int BPlusTree::DEFAULT_ORDER_M = 100;
-const int BPlusTree::LFU_CAP = 200;
+const int BPlusTree::LFU_CAP = 250;
 
 std::unordered_map<std::string, std::shared_ptr<BPlusTree>> BPlusTree::global_map;
 
-BPlusTree::BPlusTree(IXFileManager *mgr) : mgr(mgr), modified(true), root_(nullptr), lfu(LFU_CAP) {}
+BPlusTree::BPlusTree(IXFileManager *mgr) : mgr(mgr), modified(true), root_pid(-1), lfu(LFU_CAP) {}
 
 RC BPlusTree::initTree() {
   auto ret = mgr->requestNewPage();
@@ -772,7 +844,7 @@ RC BPlusTree::loadFromFile() {
   }
   meta_page = ret.second;
   const int *pt = (const int *) meta_page->dataConst();
-  int root_pid = *pt++;
+  root_pid = *pt++;
   M = *pt++;
   int key_type_val = *pt++;
   if (key_type_val > 2) {
@@ -786,16 +858,6 @@ RC BPlusTree::loadFromFile() {
 
   // load root, root could be empty after delete all entries
   // we need to distinquish whether root_pid is -1 or get root Node failed
-  if (root_pid == -1) root_ = nullptr;
-  else {
-    auto ret2 = getNode(root_pid);
-    if (ret2.first) {
-      DB_WARNING << "failed to load root node";
-      return -1;
-    }
-    root_ = ret2.second;
-  }
-
   return 0;
 }
 
@@ -866,7 +928,7 @@ RC BPlusTree::dumpToMgr() {
   }
   IXPage *tree_meta_page = ret.second;
   int *pt = (int *) tree_meta_page->dataNonConst();
-  *pt++ = root_ ? root_->getPid() : -1;
+  *pt++ = root_pid;
   *pt++ = M;
   int key_type_val = static_cast<int>(key_attr.type);
   *pt++ = key_type_val;
@@ -884,14 +946,14 @@ RC BPlusTree::dumpToMgr() {
 
 RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
   modified = true;
-  if (!root_) {
+  if (root_pid == Node::INVALID_PID) {
     auto ret = createNode(true);
     if (ret.first) return -1;
-    root_ = ret.second;
-    root_->entriesNonConst().emplace_back(key, data);
+    root_pid = ret.second->getPid();
+    ret.second->entriesNonConst().emplace_back(key, data);
     return 0;
   }
-  std::vector<std::pair<Node *, int>> path{{root_, 0}};
+  std::vector<std::pair<Node *, int>> path{{root(), 0}};
   std::pair<int, bool> res = search(key, path);
   Node *node = path.back().first;
   int idx_in_parent;
@@ -945,8 +1007,8 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
             return -1;
           }
           Node *new_root = ret.second;
-          new_root->childrenPidsNonConst().push_back(root_->getPid());
-          root_ = new_root;
+          new_root->childrenPidsNonConst().push_back(root_pid);
+          root_pid = new_root->getPid();
           parent = new_root;
         }
         auto &parent_children = parent->childrenPidsNonConst();
@@ -962,15 +1024,15 @@ RC BPlusTree::insert(const Key &key, std::shared_ptr<Data> data) {
 
 bool BPlusTree::erase(const Key &key) {
   modified = true;
-  if (!root_) return false;
-  std::vector<std::pair<Node *, int>> path{{root_, 0}};
+  if (root_pid == Node::INVALID_PID) return false;
+  std::vector<std::pair<Node *, int>> path{{root(), 0}};
   auto res = search(key, path);
   if (!res.second) return false;
   Node *node = path.back().first;
   int idx = res.first;
   node->entriesNonConst().erase(node->entriesNonConst().begin() + idx);
   sentryDeleteEntry(node, idx);
-  while (node != root_ && node->entriesConst().size() < M) {
+  while (node != root() && node->entriesConst().size() < M) {
     // borrow from sibling or merge
     int idx_in_parent = path.back().second;
     path.pop_back();
@@ -1047,47 +1109,52 @@ bool BPlusTree::erase(const Key &key) {
       if (parent->entriesConst().empty()) {
         // delete old root
         assert(parent->childrenPidsConst().front() == left->getPid());
-        root_ = parent->getChild(0);
+        root_pid = parent->getChild(0)->getPid();
         deleteNode(parent->getPid());
         break;
       }
     }
     node = parent;
   }
-  if (node == root_ && node->entriesConst().empty()) {
-    // delete root
-    deleteNode(root_->getPid());
-    root_ = nullptr;
+  if (node == root() && node->entriesConst().empty()) {
+    // tree become empty, delete root
+    deleteNode(root_pid);
+    root_pid = Node::INVALID_PID;
   }
   return true;
 }
 
 bool BPlusTree::contains(const Key &key) {
-  if (!root_) return false;
-  std::vector<std::pair<Node *, int>> path{{root_, 0}};
+  Node *rt = root();
+  if (!rt) return false;
+  std::vector<std::pair<Node *, int>> path{{rt, 0}};
   return search(key, path).second;
 }
 
 std::pair<Node *, int> BPlusTree::find(const Key &key) {
-  if (!root_) return {nullptr, -1};
-  std::vector<std::pair<Node *, int>> path{{root_, 0}};
+  Node *rt = root();
+  if (!rt) return {nullptr, -1};
+  std::vector<std::pair<Node *, int>> path{{rt, 0}};
   auto ret = search(key, path);
   return {path.back().first, ret.first};
 }
 
-Node *BPlusTree::getFirstLeaf() const {
-  if (!root_) {
+Node *BPlusTree::getFirstLeaf() {
+  Node *rt = root();
+  if (!rt) return nullptr;
+  std::vector<std::pair<Node *, int>> path{{rt, 0}};
+  if (!rt) {
     DB_WARNING << "tree empty!";
     return nullptr;
   }
-  Node *node = root_;
+  Node *node = rt;
   while (!node->isLeaf()) node = node->getChild(0);
   return node;
 }
 
 RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
   modified = true;
-  if (root_) {
+  if (root_pid == Node::INVALID_PID) {
     DB_WARNING << "can only bulkLoad when tree is empty!";
     return -1;
   }
@@ -1164,21 +1231,21 @@ RC BPlusTree::bulkLoad(std::vector<Node::data_t> entries) {
     cur_node_range = {};
 
   }
-  root_ = prev_layer.front();
+  root_pid = prev_layer.front()->getPid();
   return 0;
 }
 
-void BPlusTree::registerScan(std::pair<Node *, int> *entry) {
+void BPlusTree::registerScan(std::pair<int, int> *entry) {
   if (scan_sentry.count(entry))
-    DB_WARNING << "scan entry " << entry->first->getPid() << "," << entry->second << " exist";
+    DB_WARNING << "scan entry " << entry->first << "," << entry->second << " exist";
   scan_sentry.insert(entry);
 }
 
-void BPlusTree::unregisterScan(std::pair<Node *, int> *entry) {
+void BPlusTree::unregisterScan(std::pair<int, int> *entry) {
   if (scan_sentry.count(entry)) {
     scan_sentry.erase(entry);
   } else
-    DB_WARNING << "scan entry " << entry->first->getPid() << "," << entry->second << " not exist";
+    DB_WARNING << "scan entry " << entry->first << "," << entry->second << " not exist";
 }
 
 std::pair<int, bool> BPlusTree::search(Key key, std::vector<std::pair<Node *, int>> &path) {
@@ -1222,6 +1289,17 @@ std::pair<int, bool> BPlusTree::search(Key key, std::vector<std::pair<Node *, in
   }
 }
 
+Node *BPlusTree::root() {
+  auto ret = getNode(root_pid);
+  if (root_pid != Node::INVALID_PID && ret.first) DB_WARNING << "failed to load root";
+  return ret.second;
+}
+
+void BPlusTree::popOut(int pid) {
+  // no need to dump, will dump in dtor
+  nodes_.erase(pid);
+}
+
 std::pair<RC, Node *> BPlusTree::createNode(bool leaf) {
   auto ret = mgr->requestNewPage();
   if (ret.first) {
@@ -1231,10 +1309,14 @@ std::pair<RC, Node *> BPlusTree::createNode(bool leaf) {
   IXPage *new_page = ret.second;
   std::shared_ptr<Node> new_node = Node::createNode(this, ret.second->pid, leaf);
   nodes_[new_page->pid] = new_node;
+  lfu.put(new_node->getPid(), true);
   return {0, new_node.get()};
 }
 
 std::pair<RC, Node *> BPlusTree::getNode(int pid) {
+  if (!lfu.get(pid)) {
+    lfu.put(pid, true);
+  }
   if (!nodes_.count(pid)) {
     auto ret = mgr->getPage(pid);
     if (ret.first) {
@@ -1248,9 +1330,9 @@ std::pair<RC, Node *> BPlusTree::getNode(int pid) {
 
 RC BPlusTree::deleteNode(int pid) {
   if (!nodes_.count(pid)) {
-    DB_WARNING << "deleteNode failed! pid " << pid << " not exist!";
-    return -1;
+    return 0;
   }
+  lfu.erase(pid);
 //  Node *node = nodes_[pid].get();
 //  if (mgr->releasePage(node->getPid())) return -1;
 //  for (int data_pid : node->dataPagesId())
@@ -1258,14 +1340,24 @@ RC BPlusTree::deleteNode(int pid) {
   return 0;
 }
 
+void BPlusTree::popoutFromCache() {
+  auto popout = lfu.lazyPopout();
+  for (int pid : lfu.lazyPopout()) {
+    if (nodes_.count(pid)) {
+      popOut(pid);
+      nodes_.erase(pid);
+    }
+  }
+}
+
 void BPlusTree::sentrySplitToRight(Node *src, Node *dst, int src_begin) {
   if (!src->isLeaf()) return;
   for (auto &pair:scan_sentry) {
-    if (pair->first != src) continue;
+    if (pair->first != src->getPid()) continue;
     if (pair->second < src_begin) continue;
     // move to dst node
     int offset = pair->second - src_begin;
-    pair->first = dst;
+    pair->first = dst->getPid();
     pair->second = offset;
 
   }
@@ -1274,8 +1366,8 @@ void BPlusTree::sentrySplitToRight(Node *src, Node *dst, int src_begin) {
 void BPlusTree::sentryMergeFromRight(Node *left, Node *right, int left_size) {
   if (!left->isLeaf()) return;
   for (auto &pair:scan_sentry) {
-    if (pair->first == right) {
-      *pair = {left, left_size + pair->second};
+    if (pair->first == right->getPid()) {
+      *pair = {left->getPid(), left_size + pair->second};
     }
   }
 }
@@ -1283,10 +1375,10 @@ void BPlusTree::sentryMergeFromRight(Node *left, Node *right, int left_size) {
 void BPlusTree::sentryMergeFromLeft(Node *left, Node *right, int left_size) {
   if (!left->isLeaf()) return;
   for (auto &pair:scan_sentry) {
-    if (pair->first == right) {
+    if (pair->first == right->getPid()) {
       pair->second += left_size;
-    } else if (pair->first == left) {
-      *pair = {right, pair->second};
+    } else if (pair->first == left->getPid()) {
+      *pair = {right->getPid(), pair->second};
     }
   }
 }
@@ -1294,9 +1386,9 @@ void BPlusTree::sentryMergeFromLeft(Node *left, Node *right, int left_size) {
 void BPlusTree::sentryBorrowFromRight(Node *left, Node *right, int left_size) {
   if (!left->isLeaf()) return;
   for (auto &pair:scan_sentry) {
-    if (pair->first == right) {
+    if (pair->first == right->getPid()) {
       if (pair->second == 0) {
-        *pair = {left, left_size};
+        *pair = {left->getPid(), left_size};
       } else {
         pair->second--;
       }
@@ -1307,10 +1399,10 @@ void BPlusTree::sentryBorrowFromRight(Node *left, Node *right, int left_size) {
 void BPlusTree::sentryBorrowFromLeft(Node *left, Node *right, int left_size) {
   if (!left->isLeaf()) return;
   for (auto &pair:scan_sentry) {
-    if (pair->first == right) {
+    if (pair->first == right->getPid()) {
       pair->second++;
-    } else if (pair->first == left && pair->second == left_size - 1) {
-      *pair = {right, 0};
+    } else if (pair->first == left->getPid() && pair->second == left_size - 1) {
+      *pair = {right->getPid(), 0};
     }
   }
 }
@@ -1318,7 +1410,7 @@ void BPlusTree::sentryBorrowFromLeft(Node *left, Node *right, int left_size) {
 void BPlusTree::sentryDeleteEntry(Node *node, int idx) {
   if (!node->isLeaf()) return;
   for (auto &pair:scan_sentry) {
-    if (pair->first != node) continue;
+    if (pair->first != node->getPid()) continue;
     if (pair->second <= idx) continue;
     // shift left
     pair->second--;
@@ -1328,15 +1420,15 @@ void BPlusTree::sentryDeleteEntry(Node *node, int idx) {
 void BPlusTree::sentryInsertEntry(Node *node, int idx) {
   if (!node->isLeaf()) return;
   for (auto &pair:scan_sentry) {
-    if (pair->first != node) continue;
+    if (pair->first != node->getPid()) continue;
     if (pair->second < idx) continue;
     // shift right
     pair->second++;
   }
 }
 
-void BPlusTree::printEntries() const {
-  if (!root_) {
+void BPlusTree::printEntries() {
+  if (root_pid == -1) {
     DB_WARNING << "empty tree";
     return;
   }
@@ -1350,9 +1442,9 @@ void BPlusTree::printEntries() const {
   std::cout << std::endl;
 }
 
-void BPlusTree::printTree() const {
+void BPlusTree::printTree() {
   std::cout << "{" << std::endl;
-  printRecursive(root_);
+  printRecursive(root());
   std::cout << "}" << std::endl;
 
 }
@@ -1448,7 +1540,7 @@ IXFileManager::~IXFileManager() {
 }
 
 void IXFileManager::popOut(int id) {
-//  pages[id]->dump();
+  //  no need to dump, will dump when dtor
   pages.erase(id);
   if (free_pages.count(id))
     free_pages.erase(id);
@@ -1629,5 +1721,6 @@ Context::~Context() {
   //TODO
   file_handle->updateCounter();
   btree->dumpToMgr();
+  btree->popoutFromCache();
   mgr->dumpToFile();
 }
