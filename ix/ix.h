@@ -162,6 +162,8 @@ class LFUCache {
 
   std::vector<int> lazyPopout();
 
+  void setCap(int c);
+
 };
 
 struct IXPage;

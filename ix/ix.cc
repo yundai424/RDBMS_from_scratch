@@ -376,13 +376,6 @@ std::pair<int, bool> LFUCache::put(int key, bool lazy_pop_out) {
 
 std::vector<int> LFUCache::lazyPopout() {
   if (size <= cap) return {};
-//  DB_WARNING << size << "," << cap;
-//  FrequencyNode * fuck = tail;
-//  while(fuck) {
-//    std::cout << "[" << fuck->freq << "," << fuck->size << "]" << ",";
-//    fuck = fuck->next;
-//  }
-//  std::cout << std::endl;
   std::vector<int> res;
   FrequencyNode *fq_node = tail->next;
   int remain = size - cap;
@@ -400,14 +393,12 @@ std::vector<int> LFUCache::lazyPopout() {
       RemoveFreqNode(tmp);
     }
   }
-//  fuck = tail;
-//  while(fuck) {
-//    std::cout << "[" << fuck->freq << "," << fuck->size << "]" << ",";
-//    fuck = fuck->next;
-//  }
-//  std::cout << std::endl;
   size = cap;
   return res;
+}
+
+void LFUCache::setCap(int c) {
+  cap = c;
 }
 
 const size_t IXPage::MAX_DATA_SIZE = PAGE_SIZE - sizeof(int);
@@ -856,8 +847,7 @@ RC BPlusTree::loadFromFile() {
   const char *char_pt = (const char *) pt;
   key_attr.name = std::string(char_pt, char_pt + str_len);
 
-  // load root, root could be empty after delete all entries
-  // we need to distinquish whether root_pid is -1 or get root Node failed
+  lfu.setCap(4 * M);
   return 0;
 }
 
@@ -887,6 +877,7 @@ std::shared_ptr<BPlusTree> BPlusTree::createTree(IXFileManager *mgr, int order, 
 //  tree->M = std::min((int) (PAGE_SIZE / attr.length / 2), 100);
 //  DB_DEBUG << tree->M;
   tree->M = order;
+  tree->lfu.setCap(4 * tree->M);
   tree->modified = true;
   return tree;
 }
