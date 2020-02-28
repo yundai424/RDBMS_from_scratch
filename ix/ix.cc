@@ -847,7 +847,6 @@ RC BPlusTree::loadFromFile() {
   const char *char_pt = (const char *) pt;
   key_attr.name = std::string(char_pt, char_pt + str_len);
 
-  lfu.setCap(4 * M);
   return 0;
 }
 
@@ -863,6 +862,9 @@ BPlusTree *BPlusTree::createTreeOrLoadIfExist(IXFileManager *mgr, const Attribut
     }
     global_map[mgr->name] = tree;
   }
+  auto tree = global_map[mgr->name].get();
+  tree->lfu.setCap(4 * tree->M);
+  mgr->lfu.setCap(9 * tree->M);
   return global_map[mgr->name].get();
 }
 
@@ -877,7 +879,6 @@ std::shared_ptr<BPlusTree> BPlusTree::createTree(IXFileManager *mgr, int order, 
 //  tree->M = std::min((int) (PAGE_SIZE / attr.length / 2), 100);
 //  DB_DEBUG << tree->M;
   tree->M = order;
-  tree->lfu.setCap(4 * tree->M);
   tree->modified = true;
   return tree;
 }

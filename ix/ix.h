@@ -172,6 +172,7 @@ class BPlusTree;
 
 class IXFileManager {
   friend class IXFileHandle;
+  friend class BPlusTree;
   static const int LFU_CAP;
 
   // variables to keep counter for each operation
