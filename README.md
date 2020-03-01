@@ -6,40 +6,30 @@ If you are not using CLion and want to use command line make tool:
  - Modify the "CODEROOT" variable in makefile.inc to point to the root
   of your code base if you can't compile the code.
  
- - Implement the Index Manager (IX):
+- Implement the extension of Relation Manager (RM) to coordinate data files and the associated indices of the data files.
 
-   Go to folder "ix" and test in the following order:
+- Also, implement Query Engine (QE)
 
-   ```
+   Go to folder "qe" and type in:
+
+    make clean
+    make
+    ./qetest_01
+
+   The program should work. But it does nothing until you implement the extension of RM and QE.
+
+- If you want to try CLI:
+
+   Go to folder "cli" and type in:
+
    make clean
-   make      
-   ./ixtest_01  
-   ./ixtest_02
-   ./ixtest_03
-   ./ixtest_04
-   ./ixtest_05
-   ./ixtest_06
-   ./ixtest_07
-   ./ixtest_08
-   ./ixtest_09
-   ./ixtest_10
-   ./ixtest_11
-   ./ixtest_12
-   ./ixtest_13
-   ./ixtest_14
-   ./ixtest_15
-   ./ixtest_extra_01
-   ./ixtest_extra_02   
-   ./ixtest_p1  
-   ./ixtest_p2
-   ./ixtest_p3
-   ./ixtest_p4
-   ./ixtest_p5
-   ./ixtest_p6    
-   ./ixtest_pe_01
-   ./ixtest_pe_02
-   
-   ```
+   make
+   ./cli_example_01
 
-   The program should run. But initially it will generates an error. You are supposed to
-   implement the API of the rest of the methods in ix.h as explained in the project description.
+   or
+
+   ./start
+
+   The program should work. But you need to implement the extension of RM and QE to run this program properly. Note that examples in the cli directory are provided for your convenience. These examples are not the public test cases.
+
+- By default you should not change those classes defined in rm/rm.h and qe/qe.h. If you think some changes are really necessary, please contact us first.

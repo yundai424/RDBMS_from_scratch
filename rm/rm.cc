@@ -1,6 +1,8 @@
 #include <sys/stat.h>
 #include "rm.h"
 
+RelationManager *RelationManager::_relation_manager = nullptr;
+
 const int RelationManager::SYSTEM_FLAG = 1;
 const std::string RelationManager::TABLE_CATALOG_NAME_ = "Tables";
 const std::string RelationManager::COLUMN_CATALOG_NAME_ = "Columns";
@@ -290,6 +292,25 @@ RC RelationManager::addAttribute(const std::string &tableName, const Attribute &
   }
   cur_schema.push_back(attr);
   return createTableImpl(tableName, cur_schema);
+}
+
+// QE IX related
+RC RelationManager::createIndex(const std::string &tableName, const std::string &attributeName) {
+  return -1;
+}
+
+RC RelationManager::destroyIndex(const std::string &tableName, const std::string &attributeName) {
+  return -1;
+}
+
+RC RelationManager::indexScan(const std::string &tableName,
+                              const std::string &attributeName,
+                              const void *lowKey,
+                              const void *highKey,
+                              bool lowKeyInclusive,
+                              bool highKeyInclusive,
+                              RM_IndexScanIterator &rm_IndexScanIterator) {
+  return -1;
 }
 
 RC RelationManager::createTableImpl(const std::string &tableName,
