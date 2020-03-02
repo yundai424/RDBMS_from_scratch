@@ -53,7 +53,7 @@ RC IndexManager::scan(IXFileHandle &ixFileHandle,
                       bool lowKeyInclusive,
                       bool highKeyInclusive,
                       IX_ScanIterator &ix_ScanIterator) {
-  return ix_ScanIterator.initIterator(ixFileHandle, attribute, lowKey, highKey, lowKeyInclusive, highKeyInclusive);
+  return ix_ScanIterator.init(ixFileHandle, attribute, lowKey, highKey, lowKeyInclusive, highKeyInclusive);
 }
 
 void IndexManager::printBtree(IXFileHandle &ixFileHandle, const Attribute &attribute) const {
@@ -67,15 +67,15 @@ IX_ScanIterator::IX_ScanIterator() {
 
 IX_ScanIterator::~IX_ScanIterator() {
   // some stupid person hold the ownership but forget to close, not RAII at all :))
-  if (!closed) close();
+  if (!closed_) close();
 }
 
-RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
-                                 const Attribute &attribute,
-                                 const void *lowKey,
-                                 const void *highKey,
-                                 bool lowKeyInclusive,
-                                 bool highKeyInclusive) {
+RC IX_ScanIterator::init(IXFileHandle &ixFileHandle,
+                         const Attribute &attribute,
+                         const void *lowKey,
+                         const void *highKey,
+                         bool lowKeyInclusive,
+                         bool highKeyInclusive) {
 
   auto ret = Context::enterCtx(&ixFileHandle, attribute);
   if (ret.first) return -1;
@@ -98,8 +98,8 @@ RC IX_ScanIterator::initIterator(IXFileHandle &ixFileHandle,
     }
   }
   ctx->btree->registerScan(&ptr);
-  init = true;
-  closed = false;
+  init_ = true;
+  closed_ = false;
   return 0;
 }
 
@@ -126,12 +126,12 @@ Node *IX_ScanIterator::cur_node() {
 }
 
 RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
-  if (!init) {
+  if (!init_) {
     DB_WARNING << "IX_ScanIterator already reach IX_EOF or not initialized";
     return IX_EOF;
   }
   if (!checkCurPos()) {
-    init = false;
+    init_ = false;
     return IX_EOF;
   }
 
@@ -144,7 +144,7 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
       if (high_key->cmpKeyVal(k) <= 0) eof = true;
     }
     if (eof) {
-      init = false;
+      init_ = false;
       return IX_EOF;
     }
   }
@@ -162,11 +162,11 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key) {
 RC IX_ScanIterator::close() {
   ctx->btree->unregisterScan(&ptr);
   ctx = nullptr;
-  init = false;
+  init_ = false;
   ptr = {Node::INVALID_PID, -1};
   low_key = nullptr;
   high_key = nullptr;
-  closed = true;
+  closed_ = true;
   return 0;
 }
 

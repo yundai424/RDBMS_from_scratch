@@ -13,7 +13,8 @@ typedef unsigned PID; // page id
 typedef unsigned PageOffset; // offset inside page, should be [0,4096)
 typedef short directory_t; // directories before real data, to indicate offset for each field
 
-static directory_t MAX_FIELD_NUM = INT16_MAX;
+static const directory_t MAX_FIELD_NUM = INT16_MAX;
+static const PID INVALID_PID = UINT32_MAX;
 
 // Record ID
 struct RID {
@@ -221,8 +222,6 @@ class RecordBasedFileManager;
 
 class RBFM_ScanIterator {
   friend class Page;
-
-  static constexpr PID INVALID_PID = UINT32_MAX;
 
   RecordBasedFileManager *rbfm_;
   FileHandle *file_handle_;

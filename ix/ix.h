@@ -64,8 +64,8 @@ class Context;
 class IX_ScanIterator {
  private:
 
-  bool init = false;
-  bool closed = true;
+  bool init_ = false;
+  bool closed_ = true;
 
   std::shared_ptr<Context> ctx;
 
@@ -89,12 +89,12 @@ class IX_ScanIterator {
   // Destructor
   ~IX_ScanIterator();
 
-  RC initIterator(IXFileHandle &ixFileHandle,
-                  const Attribute &attribute,
-                  const void *lowKey,
-                  const void *highKey,
-                  bool lowKeyInclusive,
-                  bool highKeyInclusive);
+  RC init(IXFileHandle &ixFileHandle,
+          const Attribute &attribute,
+          const void *lowKey,
+          const void *highKey,
+          bool lowKeyInclusive,
+          bool highKeyInclusive);
 
   // Get next matching entry
   RC getNextEntry(RID &rid, void *key);

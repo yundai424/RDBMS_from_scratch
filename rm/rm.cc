@@ -1,9 +1,11 @@
 #include <sys/stat.h>
 #include "rm.h"
+#include "../ix/ix.h"
 
 RelationManager *RelationManager::_relation_manager = nullptr;
 
 const int RelationManager::SYSTEM_FLAG = 1;
+const std::string RelationManager::DEFAULT_DB_DIR_ = "./db_files/";
 const std::string RelationManager::TABLE_CATALOG_NAME_ = "Tables";
 const std::string RelationManager::COLUMN_CATALOG_NAME_ = "Columns";
 const std::vector<Attribute> RelationManager::TABLE_CATALOG_DESC_ = {{"table-id", AttrType::TypeInt, 4},
@@ -15,7 +17,8 @@ const std::vector<Attribute> RelationManager::COLUMN_CATALOG_DESC_ = {{"table-id
                                                                       {"column-type", AttrType::TypeInt, 4},
                                                                       {"column-length", AttrType::TypeInt, 4},
                                                                       {"column-position", AttrType::TypeInt, 4},
-                                                                      {"column-ver", AttrType::TypeInt, 4}};
+                                                                      {"column-ver", AttrType::TypeInt, 4},
+                                                                      {"have_index", AttrType::TypeInt, 4}};
 
 const directory_t RelationManager::MAX_SCHEMA_VER = INT16_MAX;
 
@@ -35,7 +38,7 @@ RelationManager::RelationManager(const RelationManager &) = default;
 RelationManager &RelationManager::operator=(const RelationManager &) = default;
 
 RC RelationManager::createCatalog() {
-  mkdir("../files", S_IRUSR | S_IWUSR | S_IXUSR);
+  mkdir(DEFAULT_DB_DIR_.c_str(), S_IRUSR | S_IWUSR | S_IXUSR);
   loadDbIfExist();
   if (ifDBExists()) {
     return -1;
@@ -140,6 +143,7 @@ RC RelationManager::getAttributes(const std::string &tableName, std::vector<Attr
 
 RC RelationManager::insertTuple(const std::string &tableName, const void *data, RID &rid) {
   loadDbIfExist();
+  if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   return insertTupleImpl(tableName, data, rid);
 }
 
@@ -161,6 +165,7 @@ RC RelationManager::insertTupleImpl(const std::string &tableName, const void *da
 
 RC RelationManager::deleteTuple(const std::string &tableName, const RID &rid) {
   loadDbIfExist();
+  if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   return deleteTupleImpl(tableName, rid);
 }
 
@@ -181,6 +186,7 @@ RC RelationManager::deleteTupleImpl(const std::string &tableName, const RID &rid
 
 RC RelationManager::updateTuple(const std::string &tableName, const void *data, const RID &rid) {
   loadDbIfExist();
+  if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   return updateTupleImpl(tableName, data, rid);
 }
 
@@ -273,8 +279,10 @@ RC RelationManager::dropAttribute(const std::string &tableName, const std::strin
     DB_ERROR << "Drop attribute `" << attributeName << "` in table `" << tableName << "` failed, attribute not exist!";
     return -1;
   }
+  RC ret = createTableImpl(tableName, cur_schema);
+  if (ret) return ret;
   cur_schema.erase(it);
-  return createTableImpl(tableName, cur_schema);
+  return 0;
 }
 
 // Extra credit work
@@ -290,17 +298,106 @@ RC RelationManager::addAttribute(const std::string &tableName, const Attribute &
     DB_ERROR << "Add attribute `" << attr.name << "` in table `" << tableName << "` failed, attribute already exist!";
     return -1;
   }
+  RC ret = createTableImpl(tableName, cur_schema);
+  if (ret) return ret;
   cur_schema.push_back(attr);
-  return createTableImpl(tableName, cur_schema);
+  return 0;
 }
 
 // QE IX related
 RC RelationManager::createIndex(const std::string &tableName, const std::string &attributeName) {
-  return -1;
+  loadDbIfExist();
+  if (!ifDBExists() || !ifTableExists(tableName)) return -1;
+  if (system_tables_.count(tableName)) return -1;
+  std::vector<Attribute> &cur_schema = table_schema_[tableName].back();
+  auto attr_it = std::find(cur_schema.begin(),
+                           cur_schema.end(),
+                           [&](const Attribute &attr) { return attr.name == attributeName; });
+  if (attr_it == cur_schema.end()) {
+    DB_WARNING << tableName << "." << attributeName << " not exist";
+    return -1;
+  }
+  if (table_index_.at(tableName).count(attributeName)) {
+    DB_WARNING << tableName << "." << attributeName << " already have index";
+    return -1;
+  }
+  // scan rid for tableName.attributeName
+  RM_ScanIterator rm_it;
+  int tid = table_ids_.at(tableName);
+  char attr_name_buf[attributeName.size() + sizeof(int)];
+  *((int *) attr_name_buf) = attributeName.size();
+  memcpy(attr_name_buf + sizeof(int), attributeName.data(), sizeof(attributeName.size()));
+  std::vector<std::string> cur_schema_strings;
+  for (auto &col : cur_schema) cur_schema_strings.push_back(col.name);
+  if (scan(COLUMN_CATALOG_NAME_, "table-id", CompOp::EQ_OP, &tid, cur_schema_strings, rm_it)) return -1;
+  RID rid{INVALID_PID, 0};
+  char tuple[PAGE_SIZE];
+  while (rm_it.getNextTuple(rid, tuple)) {
+    if (RecordBasedFileManager::cmpAttr(CompOp::EQ_OP,
+                                        AttrType::TypeVarChar,
+                                        tuple + sizeof(char) + sizeof(int),
+                                        attr_name_buf)) {
+      break;
+    }
+  }
+  rm_it.close();
+  if (rid.pageNum == INVALID_PID) {
+    DB_WARNING << "Can not find " << tableName << "." << attributeName << " in catalog";
+    return -1;
+  }
+  // find pos
+  char *tuple_pt = tuple;
+  tuple_pt += sizeof(char) + sizeof(int); // skip null indicator and table id
+  tuple_pt += sizeof(int) + attributeName.size(); // skip column name
+  tuple_pt += sizeof(int) + sizeof(int); // skip column type and column length
+  int pos = *((int *) tuple_pt);
+  // update record in catalog
+  auto new_entry = makeColumnRecord(tableName, pos, table_schema_[tableName].size() - 1, *attr_it, true);
+  if (updateTupleImpl(COLUMN_CATALOG_NAME_, new_entry.data(), rid, true)) return -1;
+  // create index file
+  return IndexManager::instance().createFile(getIndexFileName(tableName, attributeName));
 }
 
 RC RelationManager::destroyIndex(const std::string &tableName, const std::string &attributeName) {
-  return -1;
+  loadDbIfExist();
+  if (!ifDBExists() || !ifTableExists(tableName)) return -1;
+  if (system_tables_.count(tableName)) return -1;
+  std::vector<Attribute> &cur_schema = table_schema_[tableName].back();
+  auto attr_it = std::find(cur_schema.begin(),
+                           cur_schema.end(),
+                           [&](const Attribute &attr) { return attr.name == attributeName; });
+  if (attr_it == cur_schema.end()) {
+    DB_WARNING << tableName << "." << attributeName << " not exist";
+    return -1;
+  }
+  if (!table_index_.at(tableName).count(attributeName)) {
+    DB_WARNING << tableName << "." << attributeName << " index doesn't exist";
+    return -1;
+  }
+  // scan rid for tableName.attributeName
+  RM_ScanIterator rm_it;
+  int tid = table_ids_.at(tableName);
+  char attr_name_buf[attributeName.size() + sizeof(int)];
+  *((int *) attr_name_buf) = attributeName.size();
+  memcpy(attr_name_buf + sizeof(int), attributeName.data(), sizeof(attributeName.size()));
+  std::vector<std::string> cur_schema_strings;
+  for (auto &col : cur_schema) cur_schema_strings.push_back(col.name);
+  if (scan(COLUMN_CATALOG_NAME_, "table-id", CompOp::EQ_OP, &tid, cur_schema_strings, rm_it)) return -1;
+  RID rid{INVALID_PID, 0};
+  char tuple[PAGE_SIZE];
+  while (rm_it.getNextTuple(rid, tuple)) {
+    if (RecordBasedFileManager::cmpAttr(CompOp::EQ_OP,
+                                        AttrType::TypeVarChar,
+                                        tuple + sizeof(char) + sizeof(int),
+                                        attr_name_buf)) {
+      break;
+    }
+  }
+  rm_it.close();
+  // delete
+  if (deleteTupleImpl(COLUMN_CATALOG_NAME_, rid, true)) return -1;
+  // destroy file
+  return IndexManager::instance().destroyFile(getIndexFileName(tableName, attributeName));
 }
 
 RC RelationManager::indexScan(const std::string &tableName,
@@ -310,7 +407,27 @@ RC RelationManager::indexScan(const std::string &tableName,
                               bool lowKeyInclusive,
                               bool highKeyInclusive,
                               RM_IndexScanIterator &rm_IndexScanIterator) {
-  return -1;
+  loadDbIfExist();
+  if (!ifDBExists() || !ifTableExists(tableName)) return -1;
+  std::vector<Attribute> &cur_schema = table_schema_[tableName].back();
+  auto attr_it = std::find(cur_schema.begin(),
+                           cur_schema.end(),
+                           [&](const Attribute &attr) { return attr.name == attributeName; });
+  if (attr_it == cur_schema.end()) {
+    DB_WARNING << tableName << "." << attributeName << " not exist";
+    return -1;
+  }
+  if (!table_index_.at(tableName).count(attributeName)) {
+    DB_WARNING << tableName << "." << attributeName << " index doesn't exist";
+    return -1;
+  }
+  return rm_IndexScanIterator.init(tableName,
+                                   getIndexFileName(tableName, attributeName),
+                                   *attr_it,
+                                   lowKey,
+                                   highKey,
+                                   lowKeyInclusive,
+                                   highKeyInclusive);
 }
 
 RC RelationManager::createTableImpl(const std::string &tableName,
@@ -384,9 +501,10 @@ std::vector<char> RelationManager::makeTableRecord(const std::string &table_name
 }
 
 std::vector<char> RelationManager::makeColumnRecord(const std::string &table_name,
-                                                    const int idx,
+                                                    const int pos,
                                                     const int ver,
-                                                    Attribute attr) {
+                                                    const Attribute &attr,
+                                                    bool index) {
   int null_indicator_length = int(ceil(double(6) / 8));
   unsigned column_record_length = null_indicator_length; // null indicator
   column_record_length += sizeof(int); // ver
@@ -420,10 +538,14 @@ std::vector<char> RelationManager::makeColumnRecord(const std::string &table_nam
   memcpy(column_record.data() + offset, &(attr.length), sizeof(int));
   offset += sizeof(int);
   // col pos
-  memcpy(column_record.data() + offset, &idx, sizeof(int));
+  memcpy(column_record.data() + offset, &pos, sizeof(int));
   offset += sizeof(int);
   // ver
   memcpy(column_record.data() + offset, &ver, sizeof(int));
+  offset += sizeof(int);
+  // have index
+  int have_idx = index ? 1 : 0;
+  memcpy(column_record.data() + offset, &have_idx, sizeof(int));
   return column_record;
 
 }
@@ -472,7 +594,7 @@ void RelationManager::parseCatalog() {
   // parse Column.catalog
 
   // unordered_map<tid, map<ver, vector<<col_pos, attr>>>>
-  std::unordered_map<int, std::map<int, std::vector<std::pair<int, Attribute>>>> cols_by_tid;
+  std::unordered_map<int, std::map<int, std::vector<std::tuple<int, Attribute, bool>>>> cols_by_tid;
 
   FileHandle fh_col;
   rbfm_->openFile(getTableFileName(COLUMN_CATALOG_NAME_, true), fh_col);
@@ -499,14 +621,16 @@ void RelationManager::parseCatalog() {
     int attr_pos = *(buffer + offset);
     offset += sizeof(int);
     int ver = *(buffer + offset);
-    cols_by_tid[table_id][ver].emplace_back(attr_pos, col);
+    offset += sizeof(int);
+    int have_idx = *(buffer + offset);
+    cols_by_tid[table_id][ver].emplace_back(attr_pos, col, have_idx == 1);
   }
   col_scan_iterator.close();
   fh_col.closeFile();
 
   // store parsed info to table_schema_
   std::unordered_set<int> visited;
-  for (std::pair<const int, std::map<int, std::vector<std::pair<int, Attribute>>>> &table:cols_by_tid) {
+  for (std::pair<const int, std::map<int, std::vector<std::tuple<int, Attribute, bool>>>> &table:cols_by_tid) {
     auto tid = table.first;
     if (!id_tables_map.count(tid)) {
       DB_ERROR << "tid " << tid << " not exist!";
@@ -520,20 +644,25 @@ void RelationManager::parseCatalog() {
       throw std::runtime_error("table version number not match");
     }
     for (auto &ver:table.second) {
-      auto &cols = ver.second;
+      std::vector<std::tuple<int, Attribute, bool>> &cols = ver.second;
       std::sort(cols.begin(),
                 cols.end(),
-                [](const std::pair<int, Attribute> &p1, const std::pair<int, Attribute> &p2) {
-                  return p1.first < p2.first;
+                [](const std::tuple<int, Attribute, bool> &c1, const std::tuple<int, Attribute, bool> &c2) {
+                  return std::get<0>(c1) < std::get<0>(c2);
                 });
-      if (cols.back().first != cols.size() - 1) {
-        DB_ERROR << "max col pos " << cols.back().first << " while cols.size() == " << cols.size();
+      if (std::get<0>(cols.back()) != cols.size() - 1) {
+        DB_ERROR << "max col pos " << std::get<0>(cols.back()) << " while cols.size() == " << cols.size();
         throw std::runtime_error("Parse schema error");
       }
       table_schema_[table_name].emplace_back();
       std::vector<Attribute> &schema = table_schema_[table_name].back();
-      for (auto &col : cols)
-        schema.push_back(col.second);
+      for (auto &col : cols) {
+        schema.push_back(std::get<1>(cols.back()));
+        // have index
+        if (std::get<2>(cols.back())) {
+          table_index_[table_name].insert(std::get<1>(cols.back()).name);
+        }
+      }
     }
   }
   for (auto &kv : id_tables_map)
@@ -573,4 +702,23 @@ RC RM_ScanIterator::close() {
 
 RC RM_ScanIterator::getNextTuple(RID &rid, void *data) {
   return rbfm_scan_iterator_.getNextRecord(rid, data);
+}
+
+RC RM_IndexScanIterator::init(const std::string &indexFileName,
+                              const Attribute &attribute,
+                              const void *lowKey,
+                              const void *highKey,
+                              bool lowKeyInclusive,
+                              bool highKeyInclusive) {
+  if (ixFileHandle.openFile(indexFileName)) return -1;
+  return ix_ScanIterator.init(ixFileHandle, attribute, lowKey, highKey, lowKeyInclusive, highKeyInclusive);
+}
+
+RC RM_IndexScanIterator::getNextEntry(RID &rid, void *key) {
+  return ix_ScanIterator.getNextEntry(rid, key);
+}
+
+RC RM_IndexScanIterator::close() {
+  if (ix_ScanIterator.close()) return -1;
+  return ixFileHandle.closeFile();
 }

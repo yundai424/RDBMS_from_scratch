@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "../rbf/rbfm.h"
+#include "../ix/ix.h"
 
 # define RM_EOF (-1)  // end of a scan operator
 
@@ -30,13 +31,22 @@ class RM_ScanIterator {
 
 // RM_IndexScanIterator is an iterator to go through index entries
 class RM_IndexScanIterator {
+  IX_ScanIterator ix_ScanIterator;
+  IXFileHandle ixFileHandle;
  public:
-  RM_IndexScanIterator() {};    // Constructor
-  ~RM_IndexScanIterator() {};    // Destructor
+  RM_IndexScanIterator() = default;;    // Constructor
+  ~RM_IndexScanIterator() = default;;    // Destructor
+
+  RC init(const std::string &indexFileName,
+          const Attribute &attribute,
+          const void *lowKey,
+          const void *highKey,
+          bool lowKeyInclusive,
+          bool highKeyInclusive);
 
   // "key" follows the same format as in IndexManager::insertEntry()
-  RC getNextEntry(RID &rid, void *key) { return RM_EOF; };    // Get next matching entry
-  RC close() { return -1; };                        // Terminate index scan
+  RC getNextEntry(RID &rid, void *key);    // Get next matching entry
+  RC close();                        // Terminate index scan
 };
 
 // Relation Manager
@@ -50,11 +60,11 @@ class RelationManager {
 
   RC deleteCatalog();
 
-  RC createTable(const std::string &tableName, const std::vector <Attribute> &attrs);
+  RC createTable(const std::string &tableName, const std::vector<Attribute> &attrs);
 
   RC deleteTable(const std::string &tableName);
 
-  RC getAttributes(const std::string &tableName, std::vector <Attribute> &attrs);
+  RC getAttributes(const std::string &tableName, std::vector<Attribute> &attrs);
 
   RC insertTuple(const std::string &tableName, const void *data, RID &rid);
 
@@ -66,7 +76,7 @@ class RelationManager {
 
   // Print a tuple that is passed to this utility method.
   // The format is the same as printRecord().
-  RC printTuple(const std::vector <Attribute> &attrs, const void *data);
+  RC printTuple(const std::vector<Attribute> &attrs, const void *data);
 
   RC readAttribute(const std::string &tableName, const RID &rid, const std::string &attributeName, void *data);
 
@@ -76,7 +86,7 @@ class RelationManager {
           const std::string &conditionAttribute,
           const CompOp compOp,                  // comparison type such as "<" and "="
           const void *value,                    // used in the comparison
-          const std::vector <std::string> &attributeNames, // a list of projected attributes
+          const std::vector<std::string> &attributeNames, // a list of projected attributes
           RM_ScanIterator &rm_ScanIterator);
 
 // Extra credit work (10 points)
@@ -108,7 +118,9 @@ class RelationManager {
 
  private:
   static RelationManager *_relation_manager;
+
   static const int SYSTEM_FLAG;
+  static const std::string DEFAULT_DB_DIR_;
   static const std::string TABLE_CATALOG_NAME_;
   static const std::string COLUMN_CATALOG_NAME_;
   static const std::vector<Attribute> TABLE_CATALOG_DESC_;
@@ -117,9 +129,8 @@ class RelationManager {
   int max_tid_;
   bool init_;
 
-  // TODO: I suspect whether we can store these in memory, or parseCatalog each time
-//  std::unordered_map<std::string, std::vector<Attribute>> table_schema_;
   std::unordered_map<std::string, std::vector<std::vector<Attribute>>> table_schema_;
+  std::unordered_map<std::string, std::unordered_set<std::string>> table_index_;
   std::unordered_map<std::string, std::string> table_files_;
   std::unordered_map<std::string, int> table_ids_;
   std::unordered_set<std::string> system_tables_;
@@ -135,7 +146,8 @@ class RelationManager {
   /*
    * abstract as a function, in case they change the naming rules :(
    */
-  std::string inline getTableFileName(const std::string &tableName, bool is_system_table);
+  static std::string inline getTableFileName(const std::string &tableName, bool is_system_table);
+  static std::string inline getIndexFileName(const std::string &tableName, const std::string &attrName);
 
   RC createTableImpl(const std::string &tableName, const std::vector<Attribute> &attrs, bool is_system_table = false);
 
@@ -148,9 +160,10 @@ class RelationManager {
   std::vector<char> makeTableRecord(const std::string &table_name, bool is_system = false);
 
   std::vector<char> makeColumnRecord(const std::string &table_name,
-                                     const int idx,
+                                     const int pos,
                                      const int ver,
-                                     Attribute attr);
+                                     const Attribute &attr,
+                                     bool index = false);
 };
 
 bool RelationManager::ifDBExists() {
@@ -161,8 +174,12 @@ bool RelationManager::ifTableExists(const std::string &tableName) {
   return table_files_.count(tableName);
 }
 
-std::string RelationManager::getTableFileName(const std::string &tableName, bool is_system_table) {
-  return "../files/" + (is_system_table ? tableName + ".catalog" : tableName);
+std::string inline RelationManager::getTableFileName(const std::string &tableName, bool is_system_table) {
+  return DEFAULT_DB_DIR_ + (is_system_table ? tableName + ".catalog" : tableName);
+}
+
+std::string inline RelationManager::getIndexFileName(const std::string &tableName, const std::string &attrName) {
+  return DEFAULT_DB_DIR_ + tableName + "_" + attrName + ".idx";
 }
 
 void RelationManager::loadDbIfExist() {
