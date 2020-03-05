@@ -789,7 +789,7 @@ void Page::checkDataend() {
  *
  *************************************/
 
-RBFM_ScanIterator::RBFM_ScanIterator() : pid_(INVALID_PID), init_(false) {}
+RBFM_ScanIterator::RBFM_ScanIterator() : pid_(INVALID_PID), init_(false), page_(nullptr) {}
 
 RC RBFM_ScanIterator::close() {
   init_ = false;
@@ -831,6 +831,10 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
   }
   while (pid_ != INVALID_PID) {
     if (pid_ == 0 && sid_ == 0 && !page_) {
+      if (file_handle_->pages_.empty()) {
+        pid_ = INVALID_PID;
+        return RBFM_EOF;
+      }
       page_ = file_handle_->pages_[pid_];
       page_->load(*file_handle_);
     } else {
@@ -841,7 +845,6 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
           page_.reset();
           ++pid_;
           // EOF
-          int s = file_handle_->pages_.size();
           if (pid_ == file_handle_->pages_.size()) {
             pid_ = INVALID_PID;
             return RBFM_EOF;

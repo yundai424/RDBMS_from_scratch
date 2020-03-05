@@ -701,7 +701,7 @@ void RelationManager::printTables() {
 
 RC RM_ScanIterator::close() {
   int ret = file_handle_.closeFile();
-  if (!ret) return ret;
+  if (ret) return ret;
   return rbfm_scan_iterator_.close();
 }
 
