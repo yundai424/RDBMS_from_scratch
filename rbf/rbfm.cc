@@ -841,6 +841,7 @@ RC RBFM_ScanIterator::getNextRecord(RID &rid, void *data) {
           page_.reset();
           ++pid_;
           // EOF
+          int s = file_handle_->pages_.size();
           if (pid_ == file_handle_->pages_.size()) {
             pid_ = INVALID_PID;
             return RBFM_EOF;

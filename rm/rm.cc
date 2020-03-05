@@ -326,15 +326,13 @@ RC RelationManager::createIndex(const std::string &tableName, const std::string 
   char attr_name_buf[attributeName.size() + sizeof(int)];
   *((int *) attr_name_buf) = attributeName.size();
   memcpy(attr_name_buf + sizeof(int), attributeName.data(), attributeName.size());
-  std::vector<std::string> cur_schema_strings;
-  for (auto &col : cur_schema) cur_schema_strings.push_back(col.name);
-  if (scan(COLUMN_CATALOG_NAME_, "table-id", CompOp::EQ_OP, &tid, {"column-name"}, rm_it)) return -1;
+  if (scan(COLUMN_CATALOG_NAME_, "table-id", CompOp::EQ_OP, &tid, {"column-name", "column-position"}, rm_it)) return -1;
   RID rid{INVALID_PID, 0};
   char tuple[PAGE_SIZE];
-  while (rm_it.getNextTuple(rid, tuple)) {
+  while (!rm_it.getNextTuple(rid, tuple)) {
     if (RecordBasedFileManager::cmpAttr(CompOp::EQ_OP,
                                         AttrType::TypeVarChar,
-                                        tuple + sizeof(char) + sizeof(int),
+                                        tuple + 1,
                                         attr_name_buf)) {
       break;
     }
@@ -346,9 +344,8 @@ RC RelationManager::createIndex(const std::string &tableName, const std::string 
   }
   // find pos
   char *tuple_pt = tuple;
-  tuple_pt += sizeof(char) + sizeof(int); // skip null indicator and table id
+  tuple_pt += sizeof(char); // skip null indicator and table id
   tuple_pt += sizeof(int) + attributeName.size(); // skip column name
-  tuple_pt += sizeof(int) + sizeof(int); // skip column type and column length
   int pos = *((int *) tuple_pt);
   // update record in catalog
   auto new_entry = makeColumnRecord(tableName, pos, table_schema_[tableName].size() - 1, *attr_it, true);
@@ -356,6 +353,14 @@ RC RelationManager::createIndex(const std::string &tableName, const std::string 
   // create index file
   auto res = IndexManager::instance().createFile(getIndexFileName(tableName, attributeName));
   table_index_[tableName].insert(attributeName);
+
+  // dump current data into index file
+  IXFileHandle ix_fh;
+  ix_fh.openFile(getIndexFileName(tableName, attributeName));
+  scan(tableName, "", NO_OP, nullptr, {attributeName}, rm_it);
+  while (rm_it.getNextTuple(rid, tuple) != RM_EOF) {
+    IndexManager::instance().insertEntry(ix_fh, table_schema_[tableName].back()[pos], tuple, rid);
+  }
   return res;
 }
 
