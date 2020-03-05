@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include "../rbf/rbfm.h"
 #include "../ix/ix.h"
 
 # define RM_EOF (-1)  // end of a scan operator

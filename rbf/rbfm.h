@@ -412,8 +412,6 @@ class RecordBasedFileManager {
     return sizeof(directory_t) * (fields_num + 2); // one for field_num, one for version
   }
 
-  static std::vector<bool> parseNullIndicator(const unsigned char *data, unsigned fields_num);
-
   /**
    * check Rid and load page, if check valid, Page pointer will be returned, otherwise nullptr
    * @param rid
@@ -465,6 +463,8 @@ class RecordBasedFileManager {
                       AttrType type,
                       const void *val1,
                       const void *val2);
+
+  static std::vector<bool> parseNullIndicator(const unsigned char *data, unsigned fields_num);
 
 };
 

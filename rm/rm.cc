@@ -1,6 +1,5 @@
 #include <sys/stat.h>
 #include "rm.h"
-#include "../ix/ix.h"
 
 RelationManager *RelationManager::_relation_manager = nullptr;
 
@@ -310,14 +309,14 @@ RC RelationManager::createIndex(const std::string &tableName, const std::string 
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   if (system_tables_.count(tableName)) return -1;
   std::vector<Attribute> &cur_schema = table_schema_[tableName].back();
-  auto attr_it = std::find(cur_schema.begin(),
+  auto attr_it = std::find_if(cur_schema.begin(),
                            cur_schema.end(),
                            [&](const Attribute &attr) { return attr.name == attributeName; });
   if (attr_it == cur_schema.end()) {
     DB_WARNING << tableName << "." << attributeName << " not exist";
     return -1;
   }
-  if (table_index_.at(tableName).count(attributeName)) {
+  if (table_index_.count(tableName) && table_index_.at(tableName).count(attributeName)) {
     DB_WARNING << tableName << "." << attributeName << " already have index";
     return -1;
   }
@@ -326,10 +325,10 @@ RC RelationManager::createIndex(const std::string &tableName, const std::string 
   int tid = table_ids_.at(tableName);
   char attr_name_buf[attributeName.size() + sizeof(int)];
   *((int *) attr_name_buf) = attributeName.size();
-  memcpy(attr_name_buf + sizeof(int), attributeName.data(), sizeof(attributeName.size()));
+  memcpy(attr_name_buf + sizeof(int), attributeName.data(), attributeName.size());
   std::vector<std::string> cur_schema_strings;
   for (auto &col : cur_schema) cur_schema_strings.push_back(col.name);
-  if (scan(COLUMN_CATALOG_NAME_, "table-id", CompOp::EQ_OP, &tid, cur_schema_strings, rm_it)) return -1;
+  if (scan(COLUMN_CATALOG_NAME_, "table-id", CompOp::EQ_OP, &tid, {"column-name"}, rm_it)) return -1;
   RID rid{INVALID_PID, 0};
   char tuple[PAGE_SIZE];
   while (rm_it.getNextTuple(rid, tuple)) {
@@ -355,7 +354,9 @@ RC RelationManager::createIndex(const std::string &tableName, const std::string 
   auto new_entry = makeColumnRecord(tableName, pos, table_schema_[tableName].size() - 1, *attr_it, true);
   if (updateTupleImpl(COLUMN_CATALOG_NAME_, new_entry.data(), rid, true)) return -1;
   // create index file
-  return IndexManager::instance().createFile(getIndexFileName(tableName, attributeName));
+  auto res = IndexManager::instance().createFile(getIndexFileName(tableName, attributeName));
+  table_index_[tableName].insert(attributeName);
+  return res;
 }
 
 RC RelationManager::destroyIndex(const std::string &tableName, const std::string &attributeName) {
@@ -363,7 +364,7 @@ RC RelationManager::destroyIndex(const std::string &tableName, const std::string
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   if (system_tables_.count(tableName)) return -1;
   std::vector<Attribute> &cur_schema = table_schema_[tableName].back();
-  auto attr_it = std::find(cur_schema.begin(),
+  auto attr_it = std::find_if(cur_schema.begin(),
                            cur_schema.end(),
                            [&](const Attribute &attr) { return attr.name == attributeName; });
   if (attr_it == cur_schema.end()) {
@@ -410,7 +411,7 @@ RC RelationManager::indexScan(const std::string &tableName,
   loadDbIfExist();
   if (!ifDBExists() || !ifTableExists(tableName)) return -1;
   std::vector<Attribute> &cur_schema = table_schema_[tableName].back();
-  auto attr_it = std::find(cur_schema.begin(),
+  auto attr_it = std::find_if(cur_schema.begin(),
                            cur_schema.end(),
                            [&](const Attribute &attr) { return attr.name == attributeName; });
   if (attr_it == cur_schema.end()) {
@@ -421,8 +422,7 @@ RC RelationManager::indexScan(const std::string &tableName,
     DB_WARNING << tableName << "." << attributeName << " index doesn't exist";
     return -1;
   }
-  return rm_IndexScanIterator.init(tableName,
-                                   getIndexFileName(tableName, attributeName),
+  return rm_IndexScanIterator.init(getIndexFileName(tableName, attributeName),
                                    *attr_it,
                                    lowKey,
                                    highKey,
@@ -593,7 +593,7 @@ void RelationManager::parseCatalog() {
 
   // parse Column.catalog
 
-  // unordered_map<tid, map<ver, vector<<col_pos, attr>>>>
+  // unordered_map<tid, map<ver, vector<<col_pos, attr, has_idx>>>>
   std::unordered_map<int, std::map<int, std::vector<std::tuple<int, Attribute, bool>>>> cols_by_tid;
 
   FileHandle fh_col;
@@ -657,10 +657,10 @@ void RelationManager::parseCatalog() {
       table_schema_[table_name].emplace_back();
       std::vector<Attribute> &schema = table_schema_[table_name].back();
       for (auto &col : cols) {
-        schema.push_back(std::get<1>(cols.back()));
+        schema.push_back(std::get<1>(col));
         // have index
-        if (std::get<2>(cols.back())) {
-          table_index_[table_name].insert(std::get<1>(cols.back()).name);
+        if (std::get<2>(col)) {
+          table_index_[table_name].insert(std::get<1>(col).name);
         }
       }
     }
