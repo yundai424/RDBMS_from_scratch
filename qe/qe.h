@@ -196,13 +196,19 @@ class Project : public Iterator {
   // Projection operator
  public:
   Project(Iterator *input,                    // Iterator of input R
-          const std::vector<std::string> &attrNames) {};   // std::vector containing attribute names
-  ~Project() override = default;
+          const std::vector<std::string> &attrNames);   // std::vector containing attribute names
+  ~Project() override;
 
-  RC getNextTuple(void *data) override { return QE_EOF; };
+  RC getNextTuple(void *data) override;
 
   // For attribute in std::vector<Attribute>, name it as rel.attr
-  void getAttributes(std::vector<Attribute> &attrs) const override {};
+  void getAttributes(std::vector<Attribute> &attrs) const override;
+
+ private:
+  Iterator *input_;
+  std::vector<Attribute> input_attrs_;
+  std::unordered_set<std::string> input_attr_names_;  // in case the projected fields are not sorted
+  std::vector<int> proj_idx_;
 };
 
 class BNLJoin : public Iterator {

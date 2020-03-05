@@ -466,6 +466,8 @@ class RecordBasedFileManager {
 
   static std::vector<bool> parseNullIndicator(const unsigned char *data, unsigned fields_num);
 
+  static std::vector<char> makeNullIndicator(const std::vector<bool> null_indicators);
+
 };
 
 #endif // _rbfm_h_

@@ -322,6 +322,20 @@ std::vector<bool> RecordBasedFileManager::parseNullIndicator(const unsigned char
   return null_indicators;
 }
 
+std::vector<char> RecordBasedFileManager::makeNullIndicator(const std::vector<bool> null_indicators) {
+  int indicator_bytes_num = int(ceil(double(null_indicators.size()) / 8));
+  std::vector<char> indicator_bytes(indicator_bytes_num, 0);
+  char *pt = indicator_bytes.data();
+  for (int i = 0; i < null_indicators.size(); ++i) {
+    if (null_indicators[i]) {
+      unsigned char mask = 1 << (7 - (i % 8));
+      *pt = *pt | mask;
+    }
+    if (i % 8 == 7) pt++;
+  }
+  return indicator_bytes;
+}
+
 std::pair<RC, std::vector<char>>
 RecordBasedFileManager::serializeRecord(const std::vector<Attribute> &recordDescriptor,
                                         const void *data,
