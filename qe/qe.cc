@@ -18,20 +18,6 @@ std::pair<bool, Key> Utils::parseCondValue(const std::vector<Attribute> & attrs,
       pt += attrs[i].length;
     }
   }
-//  std::string key;
-//  switch (attrs[pos].type) {
-//    case TypeVarChar: {
-//      int char_len = *pt;
-//      pt += sizeof(int);
-//      for (int j = 0; j < char_len; ++j) key += *(pt + j);
-//      break;
-//    }
-//    case TypeInt:key = std::to_string(*(int *) pt);
-//      break;
-//    case TypeReal:key = std::to_string(*(float *) pt);
-//      break;
-//  }
-//  return {true, key};
   return {true, Key(attrs[pos].type, pt, {0, 0})};
 }
 
@@ -86,6 +72,7 @@ Filter::~Filter() = default;
 
 RC Filter::getNextTuple(void *data) {
   while (input_->getNextTuple(data) != QE_EOF) {
+    RelationManager::instance().printTuple(attrs_, data);
     if (condition_.op == NO_OP) {
       return 0;
     }
@@ -198,7 +185,8 @@ RC Project::getNextTuple(void * data) {
 }
 
 void Project::getAttributes(std::vector<Attribute> & attrs) const {
-  input_->getAttributes(attrs);
+  attrs.clear();
+  for (int idx : proj_idx_) attrs.push_back(input_attrs_.at(idx));
 }
 
 /******************************
@@ -208,7 +196,8 @@ void Project::getAttributes(std::vector<Attribute> & attrs) const {
  *****************************/
 
 BNLJoin::BNLJoin(Iterator *leftIn, TableScan *rightIn, const Condition &condition, const unsigned numPages) : l_in_(
-  leftIn), r_in_(rightIn), condition_(condition), num_pages_(numPages), same_key_in_left_(false) {
+  leftIn), r_in_(rightIn), condition_(condition), num_pages_(numPages), same_key_in_left_(false), l_buffer_(nullptr),
+  r_buffer_(nullptr) {
   leftIn->getAttributes(l_attrs_);
   rightIn->getAttributes(r_attrs_);
   left_record_length_ = RecordBasedFileManager::nullIndicatorLength(l_attrs_);
@@ -292,3 +281,58 @@ void BNLJoin::getAttributes(std::vector<Attribute> &attrs) const {
   attrs.insert(attrs.end(), l_attrs_.begin(), l_attrs_.end());
   attrs.insert(attrs.end(), r_attrs_.begin(), r_attrs_.end());
 }
+
+/******************************
+ *
+ *         INL Join
+ *
+ *****************************/
+INLJoin::INLJoin(Iterator *leftIn, IndexScan *rightIn, const Condition &condition)
+  : l_in_(leftIn), r_in_(rightIn), condition_(condition), same_key_in_right_(false), l_buffer_(
+  nullptr) {
+  leftIn->getAttributes(l_attrs_);
+  rightIn->getAttributes(r_attrs_);
+
+  auto it = std::find_if(l_attrs_.begin(),
+                         l_attrs_.end(),
+                         [&](const Attribute &attr) { return attr.name == condition.lhsAttr; });
+  if (it == l_attrs_.end()) {
+    DB_ERROR << "join attribute " << condition.lhsAttr << "not found in left table!";
+    throw std::runtime_error("attribute not found");
+  }
+  l_pos_ = it - l_attrs_.begin();
+  l_buffer_ = (char *) malloc(PAGE_SIZE);
+ }
+
+ INLJoin::~INLJoin() {
+  if (l_buffer_) free(l_buffer_);
+};
+
+ void INLJoin::getAttributes(std::vector<Attribute> & attrs) const {
+   attrs.clear();
+   attrs.insert(attrs.end(), l_attrs_.begin(), l_attrs_.end());
+   attrs.insert(attrs.end(), r_attrs_.begin(), r_attrs_.end());
+ }
+
+ RC INLJoin::getNextTuple(void * data) {
+   char buffer[PAGE_SIZE];
+   // current left key probes to multiple records in right B+ tree
+   if (same_key_in_right_ && r_in_->getNextTuple(buffer) != QE_EOF) {
+     Utils::concatRecords(l_attrs_, r_attrs_, l_buffer_, buffer, data);
+     return 0;
+   } else {
+     same_key_in_right_ = false;
+   }
+
+   while (l_in_->getNextTuple(l_buffer_) != QE_EOF) {
+     RelationManager::instance().printTuple(l_attrs_, l_buffer_);
+     char *l_key = l_buffer_ + RecordBasedFileManager::getFieldOffset(l_attrs_, l_buffer_, l_pos_);
+     r_in_->setIterator(l_key, l_key, true, true);
+     if (r_in_->getNextTuple(buffer) != QE_EOF) {
+       same_key_in_right_ = true;
+       Utils::concatRecords(l_attrs_, r_attrs_, l_buffer_, buffer, data);
+       return 0;
+     }
+   }
+   return QE_EOF;
+ }

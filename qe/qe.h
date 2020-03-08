@@ -276,14 +276,24 @@ class INLJoin : public Iterator {
   INLJoin(Iterator *leftIn,           // Iterator of input R
           IndexScan *rightIn,          // IndexScan Iterator of input S
           const Condition &condition   // Join condition
-  ) {};
+  );
 
-  ~INLJoin() override = default;
+  ~INLJoin() override;
 
-  RC getNextTuple(void *data) override { return QE_EOF; };
+  RC getNextTuple(void *data) override;
 
   // For attribute in std::vector<Attribute>, name it as rel.attr
-  void getAttributes(std::vector<Attribute> &attrs) const override {};
+  void getAttributes(std::vector<Attribute> &attrs) const override;
+
+ private:
+  Iterator *l_in_;
+  IndexScan *r_in_;
+  Condition condition_;
+  int l_pos_;
+  std::vector<Attribute> l_attrs_;
+  std::vector<Attribute> r_attrs_;
+  char *l_buffer_;
+  bool same_key_in_right_;
 };
 
 // Optional for everyone. 10 extra-credit points

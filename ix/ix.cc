@@ -706,7 +706,7 @@ std::shared_ptr<Node> Node::loadNodeFromPage(BPlusTree *tree_ptr, int meta_pid) 
 
 RC Node::dumpToPage() {
   if (!dirty) return 0;
-//  DB_INFO << "dump node " << pid << " with " << entries.size() << " entries " << toString();
+  DB_INFO << "dump node " << pid << " with " << entries.size() << " entries " << toString();
   // write data page
   int cur_page_idx = -1;
   int free_space = 0;

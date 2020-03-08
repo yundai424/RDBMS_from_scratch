@@ -404,7 +404,7 @@ RC RelationManager::createIndex(const std::string &tableName, const std::string 
   ix_fh.openFile(getIndexFileName(tableName, attributeName));
   scan(tableName, "", NO_OP, nullptr, {attributeName}, rm_it);
   while (rm_it.getNextTuple(rid, tuple) != RM_EOF) {
-    IndexManager::instance().insertEntry(ix_fh, table_schema_[tableName].back()[pos], tuple, rid);
+    IndexManager::instance().insertEntry(ix_fh, table_schema_[tableName].back()[pos], tuple + sizeof(char), rid);
   }
   return res;
 }
