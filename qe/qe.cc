@@ -41,17 +41,21 @@ void Utils::concatRecords(const std::vector<Attribute> &left_attrs,
                           const void *right_data,
                           void *output) {
   char *pt = (char *)output;
-  int l_null_indicator_len = RecordBasedFileManager::nullIndicatorLength(left_attrs);
-  int r_null_indicator_len = RecordBasedFileManager::nullIndicatorLength(right_attrs);
+  std::vector<bool> l_null = RecordBasedFileManager::parseNullIndicator((unsigned char *)left_data, left_attrs.size());
+  std::vector<bool> r_null = RecordBasedFileManager::parseNullIndicator((unsigned char *)right_data, right_attrs.size());
+  l_null.insert(l_null.end(), r_null.begin(), r_null.end());
+  std::vector<char> null_bytes = RecordBasedFileManager::makeNullIndicator(l_null);
+  memcpy(pt, null_bytes.data(), null_bytes.size());
+  pt += null_bytes.size();
+
   int l_record_len = RecordBasedFileManager::getRecordLength(left_attrs, left_data);
   int r_record_len = RecordBasedFileManager::getRecordLength(right_attrs, right_data);
-  memcpy(pt, left_data, l_null_indicator_len);
-  pt += l_null_indicator_len;
-  memcpy(pt, right_data, r_null_indicator_len);
-  pt += r_null_indicator_len;
-  memcpy(pt, left_data, l_record_len);
+  memcpy(pt, (char *)left_data + RecordBasedFileManager::nullIndicatorLength(left_attrs), l_record_len);
   pt += l_record_len;
-  memcpy(pt, right_data, r_record_len);
+  memcpy(pt, (char *)right_data + RecordBasedFileManager::nullIndicatorLength(right_attrs), r_record_len);
+  std::vector<Attribute> attrs;
+  attrs.insert(attrs.end(), left_attrs.begin(), left_attrs.end());
+  attrs.insert(attrs.end(), right_attrs.begin(), right_attrs.end());
 }
 /******************************
  *          Filter
