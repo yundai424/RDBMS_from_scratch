@@ -29,6 +29,30 @@ struct Condition {
   Value rhsValue;             // right-hand side value if bRhsIsAttr = FALSE
 };
 
+struct Utils {
+  /**
+   * concatenate two records into one, and write into output
+   * @param left_data
+   * @param right_data
+   * @param left_attrs
+   * @param right_attrs
+   * @param out
+   */
+  static void concatRecords(const std::vector<Attribute> &left_attrs,
+                            const std::vector<Attribute> &right_attrs,
+                            const void *left_data,
+                            const void *right_data,
+                            void *output);
+
+  /**
+   *
+   * @param is_left
+   * @param data
+   * @return <bool is_not_null, string value_as_string>
+   */
+  static std::pair<bool, Key> parseCondValue(const std::vector<Attribute> &attrs, int pos, const void *data);
+};
+
 class Iterator {
   // All the relational operators and access methods are iterators.
  public:
@@ -219,14 +243,31 @@ class BNLJoin : public Iterator {
           const Condition &condition,   // Join condition
           const unsigned numPages       // # of pages that can be loaded into memory,
     //   i.e., memory block size (decided by the optimizer)
-  ) {};
+  );
 
-  ~BNLJoin() override = default;;
+  ~BNLJoin() override;
 
-  RC getNextTuple(void *data) override { return QE_EOF; };
+  RC getNextTuple(void *data) override;
 
   // For attribute in std::vector<Attribute>, name it as rel.attr
-  void getAttributes(std::vector<Attribute> &attrs) const override {};
+  void getAttributes(std::vector<Attribute> &attrs) const override;
+
+ private:
+  std::vector<Attribute> l_attrs_;
+  std::vector<Attribute> r_attrs_;
+  Condition condition_;
+  unsigned num_pages_;
+  unsigned left_record_length_;
+  Iterator *l_in_;
+  Iterator *r_in_;
+  int l_pos_;
+  int r_pos_;
+  char *l_buffer_; // in-memory buffer with size = num_pages * PAGE_SIZE, used for loading outer table into hash table
+  char *r_buffer_;
+  std::unordered_map<Key, std::vector<char *>, KeyHash> hash_map_;
+  bool same_key_in_left_; // true when going to iter multiple records in left table that matches the same key with current right record
+  std::pair<std::vector<char *>::iterator, std::vector<char *>::iterator> same_key_iter_; // curr and end
+  RC loadLeftRecordBlocks();
 };
 
 class INLJoin : public Iterator {

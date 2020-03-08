@@ -322,7 +322,7 @@ std::vector<bool> RecordBasedFileManager::parseNullIndicator(const unsigned char
   return null_indicators;
 }
 
-std::vector<char> RecordBasedFileManager::makeNullIndicator(const std::vector<bool> null_indicators) {
+std::vector<char> RecordBasedFileManager::makeNullIndicator(const std::vector<bool> &null_indicators) {
   int indicator_bytes_num = int(ceil(double(null_indicators.size()) / 8));
   std::vector<char> indicator_bytes(indicator_bytes_num, 0);
   char *pt = indicator_bytes.data();
@@ -499,6 +499,22 @@ RC RecordBasedFileManager::deserializeRecord(const std::vector<std::vector<Attri
   }
 
   return 0;
+}
+
+int RecordBasedFileManager::getRecordLength(const std::vector<Attribute> &attrs, const void *data, int pos) {
+  std::vector<bool> null_indicators = parseNullIndicator((unsigned char *)data, attrs.size());
+  char *pt = (char *)data + nullIndicatorLength(attrs);
+  int res = 0;
+  if (pos < 0) pos = attrs.size();
+  for (int i = 0; i < pos; ++i) {
+    if (attrs[i].type == TypeVarChar) {
+      int char_len = *(int *) (pt + res);
+      res += sizeof(int) + char_len;
+    } else {
+      res += attrs[i].length;
+    }
+  }
+  return res;
 }
 
 Page *RecordBasedFileManager::findAvailableSlot(size_t size, FileHandle &file_handle) {

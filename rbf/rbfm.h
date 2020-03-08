@@ -466,8 +466,17 @@ class RecordBasedFileManager {
 
   static std::vector<bool> parseNullIndicator(const unsigned char *data, unsigned fields_num);
 
-  static std::vector<char> makeNullIndicator(const std::vector<bool> null_indicators);
+  static std::vector<char> makeNullIndicator(const std::vector<bool> &null_indicators);
 
+  static int inline nullIndicatorLength(const std::vector<Attribute> &attrs) {
+    return int(ceil(double(attrs.size()) / 8));
+  }
+
+  static int inline getFieldOffset(const std::vector<Attribute> &attrs, const void *data, int pos) {
+    return nullIndicatorLength(attrs) + getRecordLength(attrs, data, pos);
+  }
+
+  static int getRecordLength(const std::vector<Attribute> &attrs, const void *data, int pos = -1);
 };
 
 #endif // _rbfm_h_

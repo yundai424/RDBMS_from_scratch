@@ -450,7 +450,7 @@ Key::Key(AttrType key_type_, const char *key_val, RID rid)
   }
 }
 
-Key::Key(AttrType key_tpye_, const char *src) : key_type(key_tpye_) {
+Key::Key(AttrType key_type_, const char *src) : key_type(key_type_) {
   switch (key_type) {
     case AttrType::TypeInt:i = *((const int *) src);
       src += sizeof(int);

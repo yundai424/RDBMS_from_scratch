@@ -1,8 +1,64 @@
 
 #include "qe.h"
+#include <unordered_map>
+
+/******************************
+ *         Utilities
+ *****************************/
+
+std::pair<bool, Key> Utils::parseCondValue(const std::vector<Attribute> & attrs, int pos, const void * data) {
+  std::vector<bool> is_null = RecordBasedFileManager::parseNullIndicator((unsigned char *) data, attrs.size());
+  if (is_null[pos]) return {false, {}};
+  char *pt = (char *) data + RecordBasedFileManager::nullIndicatorLength(attrs);
+  for (int i = 0; i < pos; ++i) {
+    if (attrs[i].type == TypeVarChar) {
+      int char_len = *pt;
+      pt += sizeof(int) + char_len;
+    } else {
+      pt += attrs[i].length;
+    }
+  }
+//  std::string key;
+//  switch (attrs[pos].type) {
+//    case TypeVarChar: {
+//      int char_len = *pt;
+//      pt += sizeof(int);
+//      for (int j = 0; j < char_len; ++j) key += *(pt + j);
+//      break;
+//    }
+//    case TypeInt:key = std::to_string(*(int *) pt);
+//      break;
+//    case TypeReal:key = std::to_string(*(float *) pt);
+//      break;
+//  }
+//  return {true, key};
+  return {true, Key(attrs[pos].type, pt, {0, 0})};
+}
+
+void Utils::concatRecords(const std::vector<Attribute> &left_attrs,
+                          const std::vector<Attribute> &right_attrs,
+                          const void *left_data,
+                          const void *right_data,
+                          void *output) {
+  char *pt = (char *)output;
+  int l_null_indicator_len = RecordBasedFileManager::nullIndicatorLength(left_attrs);
+  int r_null_indicator_len = RecordBasedFileManager::nullIndicatorLength(right_attrs);
+  int l_record_len = RecordBasedFileManager::getRecordLength(left_attrs, left_data);
+  int r_record_len = RecordBasedFileManager::getRecordLength(right_attrs, right_data);
+  memcpy(pt, left_data, l_null_indicator_len);
+  pt += l_null_indicator_len;
+  memcpy(pt, right_data, r_null_indicator_len);
+  pt += r_null_indicator_len;
+  memcpy(pt, left_data, l_record_len);
+  pt += l_record_len;
+  memcpy(pt, right_data, r_record_len);
+}
+/******************************
+ *          Filter
+ *****************************/
 
 Filter::Filter(Iterator *input, const Condition &condition) : input_(input), condition_(condition) {
-  if (condition_.bRhsIsAttr) {
+  if (condition.bRhsIsAttr) {
     DB_WARNING << "right hand side must be value but not attr in Filter operation!";
     throw std::runtime_error("Invalid condition");
   }
@@ -92,7 +148,7 @@ RC Project::getNextTuple(void * data) {
 
     // 1. locate pointer pointing to the beginning of each field in input data
     std::vector<int> data_field_begin;
-    char *in_pt = buffer + int(ceil(double(input_attrs_.size()) / 8));
+    char *in_pt = buffer + RecordBasedFileManager::nullIndicatorLength(input_attrs_);
     int offset = 0;
     for (int i = 0; i < input_attrs_.size(); ++i) {
       if (is_null[i]) {
@@ -139,4 +195,96 @@ RC Project::getNextTuple(void * data) {
 
 void Project::getAttributes(std::vector<Attribute> & attrs) const {
   input_->getAttributes(attrs);
+}
+
+/******************************
+ *
+ *         BNL Join
+ *
+ *****************************/
+
+BNLJoin::BNLJoin(Iterator *leftIn, TableScan *rightIn, const Condition &condition, const unsigned numPages) : l_in_(
+  leftIn), r_in_(rightIn), condition_(condition), num_pages_(numPages), same_key_in_left_(false) {
+  leftIn->getAttributes(l_attrs_);
+  rightIn->getAttributes(r_attrs_);
+  left_record_length_ = RecordBasedFileManager::nullIndicatorLength(l_attrs_);
+  for (Attribute &attr : l_attrs_)
+    left_record_length_ += attr.length;
+
+  auto it = std::find_if(l_attrs_.begin(), l_attrs_.end(), [&] (const Attribute &attr) {return attr.name == condition.lhsAttr;});
+  if (it == l_attrs_.end()) {
+    DB_ERROR << "join attribute " << condition.lhsAttr << "not found in left table!";
+    throw std::runtime_error("attribute not found");
+  }
+  l_pos_ = it - l_attrs_.begin();
+
+  it = std::find_if(r_attrs_.begin(), r_attrs_.end(), [&] (const Attribute &attr) {return attr.name == condition.rhsAttr;});
+  if (it == r_attrs_.end()) {
+    DB_ERROR << "join attribute " << condition.rhsAttr << "not found in right table!";
+    throw std::runtime_error("attribute not found");
+  }
+  r_pos_ = it - r_attrs_.begin();
+  r_buffer_ = (char *) malloc(PAGE_SIZE);
+  l_buffer_ = (char *) malloc(numPages * PAGE_SIZE);
+  loadLeftRecordBlocks();
+}
+
+BNLJoin::~BNLJoin() {
+  if (l_buffer_) free(l_buffer_);
+  if (r_buffer_) free(r_buffer_);
+};
+
+/**
+ * load numPages of records and store into hash_map_
+ * @return <RC, map<val_string, pointer>>
+ */
+RC BNLJoin::loadLeftRecordBlocks() {
+  hash_map_.clear();
+  memset(l_buffer_, 0, num_pages_ * PAGE_SIZE);
+  char *output = l_buffer_;
+  unsigned max_num_records = num_pages_ * PAGE_SIZE / left_record_length_;
+  for (int i = 0; i < max_num_records; ++i) {
+    if (l_in_->getNextTuple(output) != QE_EOF) {
+      auto res = Utils::parseCondValue(l_attrs_, l_pos_, output);
+      if (!res.first) continue; // null field, just skip
+      hash_map_[res.second].push_back(output);
+      output += left_record_length_;
+    } else {
+      break;
+    }
+  }
+  if (hash_map_.empty()) return QE_EOF;
+  return 0;
+}
+
+RC BNLJoin::getNextTuple(void * data) {
+  // multiple records in left table mapped to the same value
+  if (same_key_in_left_ && same_key_iter_.first != same_key_iter_.second) {
+    Utils::concatRecords(l_attrs_, r_attrs_, *same_key_iter_.first, r_buffer_, data);
+    ++same_key_iter_.first;
+    return 0;
+  } else {
+    same_key_in_left_ = false;
+  }
+  // finish output the same left records, fetch next right record
+  while (r_in_->getNextTuple(r_buffer_) != QE_EOF) {
+    auto key = Utils::parseCondValue(r_attrs_, r_pos_, r_buffer_);
+    if (!key.first || !hash_map_.count(key.second) || hash_map_.at(key.second).empty()) continue;
+    std::vector<char *> &left_records = hash_map_.at(key.second);
+    Utils::concatRecords(l_attrs_, r_attrs_, left_records.at(0), r_buffer_, data);
+    if (left_records.size() > 1) {
+      same_key_iter_.first = left_records.begin() + 1;
+      same_key_iter_.second = left_records.end();
+      same_key_in_left_ = true;
+    }
+    return 0;
+  }
+  if (loadLeftRecordBlocks()) return QE_EOF;
+  return getNextTuple(data);
+}
+
+void BNLJoin::getAttributes(std::vector<Attribute> &attrs) const {
+  attrs.clear();
+  attrs.insert(attrs.end(), l_attrs_.begin(), l_attrs_.end());
+  attrs.insert(attrs.end(), r_attrs_.begin(), r_attrs_.end());
 }

@@ -129,7 +129,7 @@ class RelationManager {
   bool init_;
 
   std::unordered_map<std::string, std::vector<std::vector<Attribute>>> table_schema_;
-  std::unordered_map<std::string, std::unordered_set<std::string>> table_index_;
+  std::unordered_map<std::string, std::unordered_map<std::string, int>> table_index_;
   std::unordered_map<std::string, std::string> table_files_;
   std::unordered_map<std::string, int> table_ids_;
   std::unordered_set<std::string> system_tables_;

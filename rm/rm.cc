@@ -159,6 +159,19 @@ RC RelationManager::insertTupleImpl(const std::string &tableName, const void *da
   rbfm_->openFile(table_file, fh);
   RC ret = rbfm_->insertRecordImpl(fh, recordDescriptor, data, rid, cur_ver);
   rbfm_->closeFile(fh);
+  // update b+ tree
+  if (table_index_.count(tableName)) {
+    for (auto &index : table_index_.at(tableName)) {
+      IXFileHandle ixfh;
+      IndexManager &im = IndexManager::instance();
+      im.openFile(getIndexFileName(tableName, index.first), ixfh);
+      auto &curr_schema = table_schema_.at(tableName).back();
+      char *key = (char *) data + RecordBasedFileManager::getFieldOffset(curr_schema, data, index.second);
+      ret += im.insertEntry(ixfh, curr_schema.at(index.second), key, rid);
+      im.closeFile(ixfh);
+    }
+  }
+
   return ret;
 }
 
@@ -177,9 +190,23 @@ RC RelationManager::deleteTupleImpl(const std::string &tableName, const RID &rid
   const auto &table_file = table_files_.at(tableName);
   const auto &recordDescriptor = table_schema_.at(tableName).back(); // actually we don't need schema when deleting
   FileHandle fh;
-  rbfm_->openFile(table_file, fh);
-  RC ret = rbfm_->deleteRecord(fh, recordDescriptor, rid);
-  rbfm_->closeFile(fh);
+  RC ret = rbfm_->openFile(table_file, fh);
+  // update b+ tree
+  if (table_index_.count(tableName)) {
+    IndexManager &im = IndexManager::instance();
+    char buffer[PAGE_SIZE];
+    ret += readTuple(tableName, rid, buffer); // read data to parse key
+    for (auto &index : table_index_.at(tableName)) {
+      IXFileHandle ixfh;
+      im.openFile(getIndexFileName(tableName, index.first), ixfh);
+      auto &curr_schema = table_schema_.at(tableName).back();
+      char *key = buffer + RecordBasedFileManager::getFieldOffset(curr_schema, buffer, index.second);
+      ret += im.deleteEntry(ixfh, curr_schema.at(index.second), key, rid);
+      im.closeFile(ixfh);
+    }
+  }
+  ret += rbfm_->deleteRecord(fh, recordDescriptor, rid);
+  ret += rbfm_->closeFile(fh);
   return ret;
 }
 
@@ -200,9 +227,27 @@ RC RelationManager::updateTupleImpl(const std::string &tableName, const void *da
   const auto &recordDescriptor = table_schema_.at(tableName).back();
   directory_t cur_ver = table_schema_.at(tableName).size() - 1;
   FileHandle fh;
-  rbfm_->openFile(table_file, fh);
-  RC ret = rbfm_->updateRecordImpl(fh, recordDescriptor, data, rid, cur_ver);
-  rbfm_->closeFile(fh);
+  RC ret = rbfm_->openFile(table_file, fh);
+  // update b+ tree
+  if (table_index_.count(tableName)) {
+    IndexManager &im = IndexManager::instance();
+    char buffer[PAGE_SIZE];
+    ret += readTuple(tableName, rid, buffer); // read data to parse key
+    for (auto &index : table_index_.at(tableName)) {
+      IXFileHandle ixfh;
+      im.openFile(getIndexFileName(tableName, index.first), ixfh);
+      auto &curr_schema = table_schema_.at(tableName).back();
+      // delete old b+ tree element
+      char *old_key = buffer + RecordBasedFileManager::getFieldOffset(curr_schema, buffer, index.second);
+      ret += im.deleteEntry(ixfh, curr_schema.at(index.second), old_key, rid);
+      // insert new
+      char *new_key = (char *)data + RecordBasedFileManager::getFieldOffset(curr_schema, data, index.second);
+      ret += im.insertEntry(ixfh, curr_schema.at(index.second), new_key, rid);
+      im.closeFile(ixfh);
+    }
+  }
+  ret += rbfm_->updateRecordImpl(fh, recordDescriptor, data, rid, cur_ver);
+  ret += rbfm_->closeFile(fh);
   return ret;
 }
 
@@ -352,7 +397,7 @@ RC RelationManager::createIndex(const std::string &tableName, const std::string 
   if (updateTupleImpl(COLUMN_CATALOG_NAME_, new_entry.data(), rid, true)) return -1;
   // create index file
   auto res = IndexManager::instance().createFile(getIndexFileName(tableName, attributeName));
-  table_index_[tableName].insert(attributeName);
+  table_index_[tableName][attributeName] = pos;
 
   // dump current data into index file
   IXFileHandle ix_fh;
@@ -665,7 +710,7 @@ void RelationManager::parseCatalog() {
         schema.push_back(std::get<1>(col));
         // have index
         if (std::get<2>(col)) {
-          table_index_[table_name].insert(std::get<1>(col).name);
+          table_index_[table_name][std::get<1>(col).name] = std::get<0>(col);
         }
       }
     }

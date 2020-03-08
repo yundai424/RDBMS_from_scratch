@@ -331,7 +331,7 @@ struct Key {
 
   Key(AttrType key_type_, const char *key_val, RID rid);
 
-  Key(AttrType key_tpye_, const char *src); // deserialize from binary
+  Key(AttrType key_type_, const char *src); // deserialize from binary
 
   int getSize() const;
 
@@ -345,6 +345,13 @@ struct Key {
 
   bool operator<(const Key &rhs) const;
   bool operator==(const Key &rhs) const;
+};
+
+struct KeyHash {
+  size_t operator() (const Key &k) const {
+    size_t seed = (static_cast<std::size_t>(k.key_type)<<48);
+    return seed ^ std::hash<std::string>()(k.toString());
+  }
 };
 
 class BPlusTree;
