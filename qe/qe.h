@@ -322,7 +322,7 @@ class Aggregate : public Iterator {
   Aggregate(Iterator *input,          // Iterator of input R
             const Attribute &aggAttr,        // The attribute over which we are computing an aggregate
             AggregateOp op            // Aggregate operation
-  ) {};
+  );
 
   // Optional for everyone: 5 extra-credit points
   // Group-based hash aggregation
@@ -330,16 +330,36 @@ class Aggregate : public Iterator {
             const Attribute &aggAttr,           // The attribute over which we are computing an aggregate
             const Attribute &groupAttr,         // The attribute over which we are grouping the tuples
             AggregateOp op              // Aggregate operation
-  ) {};
+  );
 
   ~Aggregate() = default;
 
-  RC getNextTuple(void *data) override { return QE_EOF; };
+  RC getNextTuple(void *data) override;
 
   // Please name the output attribute as aggregateOp(aggAttr)
   // E.g. Relation=rel, attribute=attr, aggregateOp=MAX
   // output attrname = "MAX(rel.attr)"
   void getAttributes(std::vector<Attribute> &attrs) const override {};
+
+ private:
+  Iterator *input_;
+  Attribute agg_attr_;
+  Attribute group_attr_;
+  AggregateOp op_;
+  float cnt_;
+  float val_;
+  bool is_group_by_;
+  bool is_first_return_;  // indicate whether getNextTuple has been called
+  std::unordered_map<Key, std::pair<float, float>, KeyHash> group_map_;  // map<key, <cnt, val>>
+  std::unordered_map<Key, std::pair<float, float>, KeyHash>::iterator group_map_iter_;
+
+  void updateValue(float &cnt, float &val, const void *data);
+
+  float returnValue(float cnt, float val);
+
+  RC getNextNotGroupBy(void *data);
+
+  RC getNextGroupBy(void *data);
 };
 
 #endif

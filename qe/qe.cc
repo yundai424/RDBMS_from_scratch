@@ -72,7 +72,6 @@ Filter::~Filter() = default;
 
 RC Filter::getNextTuple(void *data) {
   while (input_->getNextTuple(data) != QE_EOF) {
-    RelationManager::instance().printTuple(attrs_, data);
     if (condition_.op == NO_OP) {
       return 0;
     }
@@ -314,25 +313,173 @@ INLJoin::INLJoin(Iterator *leftIn, IndexScan *rightIn, const Condition &conditio
    attrs.insert(attrs.end(), r_attrs_.begin(), r_attrs_.end());
  }
 
- RC INLJoin::getNextTuple(void * data) {
-   char buffer[PAGE_SIZE];
-   // current left key probes to multiple records in right B+ tree
-   if (same_key_in_right_ && r_in_->getNextTuple(buffer) != QE_EOF) {
-     Utils::concatRecords(l_attrs_, r_attrs_, l_buffer_, buffer, data);
-     return 0;
-   } else {
-     same_key_in_right_ = false;
-   }
+RC INLJoin::getNextTuple(void *data) {
+  char buffer[PAGE_SIZE];
+  // current left key probes to multiple records in right B+ tree
+  if (same_key_in_right_ && r_in_->getNextTuple(buffer) != QE_EOF) {
+    Utils::concatRecords(l_attrs_, r_attrs_, l_buffer_, buffer, data);
+    return 0;
+  } else {
+    same_key_in_right_ = false;
+  }
 
-   while (l_in_->getNextTuple(l_buffer_) != QE_EOF) {
-     RelationManager::instance().printTuple(l_attrs_, l_buffer_);
-     char *l_key = l_buffer_ + RecordBasedFileManager::getFieldOffset(l_attrs_, l_buffer_, l_pos_);
-     r_in_->setIterator(l_key, l_key, true, true);
-     if (r_in_->getNextTuple(buffer) != QE_EOF) {
-       same_key_in_right_ = true;
-       Utils::concatRecords(l_attrs_, r_attrs_, l_buffer_, buffer, data);
-       return 0;
-     }
-   }
-   return QE_EOF;
- }
+  while (l_in_->getNextTuple(l_buffer_) != QE_EOF) {
+    char *l_key = l_buffer_ + RecordBasedFileManager::getFieldOffset(l_attrs_, l_buffer_, l_pos_);
+    r_in_->setIterator(l_key, l_key, true, true);
+    if (r_in_->getNextTuple(buffer) != QE_EOF) {
+      same_key_in_right_ = true;
+      Utils::concatRecords(l_attrs_, r_attrs_, l_buffer_, buffer, data);
+      return 0;
+    }
+  }
+  return QE_EOF;
+}
+
+/******************************
+*
+*         Aggregate
+
+*****************************/
+Aggregate::Aggregate(Iterator *input, const Attribute &aggAttr, AggregateOp op)
+  : input_(input), agg_attr_(aggAttr), op_(op), is_group_by_(false), cnt_(0), val_(0), is_first_return_(true) {
+  if (op_ == AggregateOp::MIN) val_ = std::numeric_limits<float>::max();
+  // find position of aggAttr
+  std::vector<Attribute> input_attrs;
+  input->getAttributes(input_attrs);
+  auto it = std::find_if(input_attrs.begin(),
+                         input_attrs.end(),
+                         [&](const Attribute &attr) { return attr.name == aggAttr.name; });
+  if (it == input_attrs.end())
+    throw std::runtime_error("aggAttr not found!");
+  int pos = it - input_attrs.begin();
+
+  // read data
+  char buffer[PAGE_SIZE];
+  while (input->getNextTuple(buffer) != QE_EOF) {
+    auto is_null = RecordBasedFileManager::parseNullIndicator((unsigned char *)buffer, input_attrs.size());
+    if (is_null[pos]) continue;
+    int offset = RecordBasedFileManager::getFieldOffset(input_attrs, buffer, pos);
+    updateValue(cnt_, val_, buffer + offset);
+  }
+}
+
+Aggregate::Aggregate(Iterator *input, const Attribute &aggAttr, const Attribute &groupAttr, AggregateOp op)
+  : input_(input), agg_attr_(aggAttr), group_attr_(groupAttr), op_(op), is_group_by_(true), is_first_return_(true) {
+  std::vector<Attribute> input_attrs;
+  input->getAttributes(input_attrs);
+  auto it = std::find_if(input_attrs.begin(),
+                         input_attrs.end(),
+                         [&](const Attribute &attr) { return attr.name == aggAttr.name; });
+  if (it == input_attrs.end())
+    throw std::runtime_error("aggAttr not found!");
+  int agg_pos = it - input_attrs.begin();
+
+  it = std::find_if(input_attrs.begin(),
+                    input_attrs.end(),
+                    [&](const Attribute &attr) { return attr.name == groupAttr.name; });
+  if (it == input_attrs.end())
+    throw std::runtime_error("groutAttr not found!");
+  int group_pos = it - input_attrs.begin();
+
+  char buffer[PAGE_SIZE];
+  while (input->getNextTuple(buffer) != QE_EOF) {
+    auto is_null = RecordBasedFileManager::parseNullIndicator((unsigned char *)buffer, input_attrs.size());
+    if (is_null.at(group_pos) || is_null.at(agg_pos)) continue;
+    auto key = Utils::parseCondValue(input_attrs, group_pos, buffer).second;
+    // init val according to aggrOp
+    if (!group_map_.count(key)) {
+      if (op == AggregateOp::MIN) {
+        group_map_[key] = {0, std::numeric_limits<float>::max()};
+      } else {
+        group_map_[key] = {0, 0};
+      }
+    }
+    int offset = RecordBasedFileManager::getFieldOffset(input_attrs, buffer, agg_pos);
+    updateValue(group_map_.at(key).first, group_map_.at(key).second, buffer + offset);
+  }
+}
+
+RC Aggregate::getNextTuple(void * data) {
+  if (is_group_by_) return getNextGroupBy(data);
+  else return getNextNotGroupBy(data);
+}
+
+RC Aggregate::getNextGroupBy(void *data) {
+  if (is_first_return_) {
+    is_first_return_ = false;
+    group_map_iter_ = group_map_.begin();
+  }
+  if (group_map_iter_ == group_map_.end()) return QE_EOF;
+
+  char *pt = (char *) data;
+  // null indicator
+  memset(pt, 0, sizeof(char));
+  ++pt;
+  // groupby attr
+  Key k = group_map_iter_->first;
+  switch (k.key_type) {
+    case AttrType::TypeInt:memcpy(pt, &k.i, sizeof(int));
+      pt += sizeof(int);
+      break;
+    case AttrType::TypeReal:memcpy(pt, &k.f, sizeof(float));
+      pt += sizeof(float);
+      break;
+    case AttrType::TypeVarChar:int str_len = k.s.size();
+      memcpy(pt, &str_len, sizeof(int));
+      pt += sizeof(int);
+      memcpy(pt, k.s.data(), str_len);
+      pt += str_len;
+      break;
+  }
+  // aggr value
+  float res = returnValue(group_map_iter_->second.first, group_map_iter_->second.second);
+  memcpy(pt, &res, sizeof(float));
+  ++group_map_iter_;
+  return 0;
+}
+
+RC Aggregate::getNextNotGroupBy(void *data) {
+  if (!is_first_return_) return QE_EOF;
+  char *pt = (char *)data;
+  memset(pt, 0, sizeof(char));
+  ++pt;
+  float res = returnValue(cnt_, val_);
+  memcpy(pt, &res, agg_attr_.length);
+  is_first_return_ = false;
+  return 0;
+}
+
+void Aggregate::updateValue(float &cnt, float &val, const void *data) {
+  float res = 0;
+  if (agg_attr_.type == TypeInt) res = *((int *) data);
+  else res = *((float *) data);
+  switch (op_) {
+    case AggregateOp::COUNT:
+      ++cnt;
+      break;
+    case AggregateOp::SUM:
+      val += res;
+      break;
+    case AggregateOp::MAX:
+      val = std::max(val, res);
+      break;
+    case AggregateOp::MIN:
+      val = std::min(val, res);
+      break;
+    case AggregateOp::AVG:
+      ++cnt;
+      val += res;
+      break;
+  }
+}
+
+float Aggregate::returnValue(float cnt, float val) {
+  switch (op_) {
+    case AggregateOp::COUNT:
+      return cnt;
+    case AggregateOp::AVG:
+      return val / cnt;
+    default:
+      return val;
+  }
+}
