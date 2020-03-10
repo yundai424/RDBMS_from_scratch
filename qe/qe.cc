@@ -483,3 +483,141 @@ float Aggregate::returnValue(float cnt, float val) {
       return val;
   }
 }
+
+/******************************
+*
+*         GHJoin
+
+*****************************/
+
+GHJoin::GHJoin(Iterator *leftIn, Iterator *rightIn, const Condition &condition, const unsigned numPartitions)
+  : l_in_(leftIn), r_in_(rightIn), condition_(condition), num_partitions_(numPartitions), curr_partition_(-1),
+  same_key_in_left_(false), r_buffer_(nullptr) {
+
+  leftIn->getAttributes(l_attrs_);
+  rightIn->getAttributes(r_attrs_);
+  // get index of condition attr on left and right table
+  auto it = std::find_if(l_attrs_.begin(), l_attrs_.end(), [&] (const Attribute &attr) {return attr.name == condition.lhsAttr;});
+  if (it == l_attrs_.end()) {
+    DB_ERROR << "join attribute " << condition.lhsAttr << "not found in left table!";
+    throw std::runtime_error("attribute not found");
+  }
+  l_pos_ = it - l_attrs_.begin();
+
+  it = std::find_if(r_attrs_.begin(), r_attrs_.end(), [&] (const Attribute &attr) {return attr.name == condition.rhsAttr;});
+  if (it == r_attrs_.end()) {
+    DB_ERROR << "join attribute " << condition.rhsAttr << "not found in right table!";
+    throw std::runtime_error("attribute not found");
+  }
+  r_pos_ = it - r_attrs_.begin();
+
+  // initialize all partition files
+  rbfm_ = &RecordBasedFileManager::instance();
+  for (int i = 0; i < numPartitions; ++i) {
+//    FileHandle l_fh;
+    std::string l_fname = getPartitionFileName(i, true);
+    rbfm_->createFile(l_fname);
+    l_fhs_.push_back(std::make_shared<FileHandle>());
+    rbfm_->openFile(l_fname, *l_fhs_.back());
+
+//    FileHandle r_fh;
+    std::string r_fname = getPartitionFileName(i, false);
+    rbfm_->createFile(r_fname);
+    r_fhs_.push_back(std::make_shared<FileHandle>());
+    rbfm_->openFile(r_fname, *r_fhs_.back());
+
+  }
+  // hash and dump each table to disk partition
+  dumpPartitions(true);
+  dumpPartitions(false);
+  r_buffer_ = (char *) malloc(PAGE_SIZE);
+}
+
+GHJoin::~GHJoin() {
+  for (auto &fh : l_fhs_) {
+    fh->closeFile();
+    rbfm_->destroyFile(fh->name);
+  }
+  for (auto &fh : r_fhs_) {
+    fh->closeFile();
+    rbfm_->destroyFile(fh->name);
+  }
+  if (r_buffer_) free(r_buffer_);
+}
+
+void GHJoin::dumpPartitions(bool is_left) {
+  Iterator *in = is_left ? l_in_ : r_in_;
+  auto &attrs = is_left ? l_attrs_ : r_attrs_;
+  int pos = is_left ? l_pos_ : r_pos_;
+  auto &fhs = is_left ? l_fhs_ : r_fhs_;
+
+  char buffer[PAGE_SIZE];
+  RID rid;
+  while (in->getNextTuple(buffer) != QE_EOF) {
+    auto key = Utils::parseCondValue(attrs, pos, buffer);
+    if (!key.first) continue; // NULL field
+    int hash = getHash(key.second);
+    if (rbfm_->insertRecord(*fhs.at(hash), attrs, buffer, rid) != 0)
+      throw std::runtime_error("dump partition failed");
+  }
+}
+
+RC GHJoin::loadLeftPartition(int num) {
+  hash_map_.clear();
+  RBFM_ScanIterator rmsi;
+  rbfm_->scan(*l_fhs_.at(num), l_attrs_, "", CompOp::NO_OP, nullptr, {}, rmsi);
+  char buffer[PAGE_SIZE];
+  RID rid;
+  while (rmsi.getNextRecord(rid, buffer) != QE_EOF) {
+    auto res = Utils::parseCondValue(l_attrs_, l_pos_, buffer);
+    if (!res.first) continue; // null field, just skip
+    hash_map_[res.second].push_back({rid.pageNum, rid.slotNum});
+  }
+  if (hash_map_.empty()) return QE_EOF;
+  return 0;
+}
+
+RC GHJoin::getNextTuple(void * data) {
+  // multiple records in left partition mapped to the same record in right buffer
+  if (same_key_in_left_ && same_key_iter_.first != same_key_iter_.second) {
+    char buffer[PAGE_SIZE];
+    rbfm_->readRecord(*l_fhs_.at(curr_partition_), l_attrs_, *same_key_iter_.first, buffer);
+    Utils::concatRecords(l_attrs_, r_attrs_, buffer, r_buffer_, data);
+    ++same_key_iter_.first;
+    return 0;
+  } else {
+    same_key_in_left_ = false;
+  }
+
+  RID rid;
+  while (r_iter_.getNextRecord(rid, r_buffer_) != QE_EOF) {
+    // probe into left partition
+    auto key = Utils::parseCondValue(r_attrs_, r_pos_, r_buffer_);
+    if (!key.first || !hash_map_.count(key.second) || hash_map_.at(key.second).empty()) continue;
+    std::vector<RID> &left_rids = hash_map_.at(key.second);
+    char buffer[PAGE_SIZE];
+    rbfm_->readRecord(*l_fhs_.at(curr_partition_), l_attrs_, left_rids.at(0), buffer);
+    Utils::concatRecords(l_attrs_, r_attrs_, buffer, r_buffer_, data);
+    if (left_rids.size() > 1) {
+      same_key_iter_.first = left_rids.begin() + 1;
+      same_key_iter_.second = left_rids.end();
+      same_key_in_left_ = true;
+    }
+    return 0;
+  }
+
+  // need to load next partition
+  r_iter_.close();
+  ++curr_partition_;
+  if (curr_partition_ >= num_partitions_) return QE_EOF; // reached end
+  loadLeftPartition(curr_partition_);
+  rbfm_->scan(*r_fhs_.at(curr_partition_), r_attrs_, "", CompOp::NO_OP, nullptr, {}, r_iter_);
+  return getNextTuple(data);
+}
+
+
+void GHJoin::getAttributes(std::vector<Attribute> & attrs) const {
+  attrs.clear();
+  attrs.insert(attrs.end(), l_attrs_.begin(), l_attrs_.end());
+  attrs.insert(attrs.end(), r_attrs_.begin(), r_attrs_.end());
+}

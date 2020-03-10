@@ -836,10 +836,6 @@ RC RBFM_ScanIterator::init(FileHandle &fileHandle,
                            CompOp compOp,
                            const void *value,
                            const std::vector<std::string> &attributeNames) {
-  if (attributeNames.empty()) {
-    DB_ERROR << "attibuteNames can not be emtpy!";
-    return -1;
-  }
   init_ = true;
   rbfm_ = rbfm;
   file_handle_ = &fileHandle;

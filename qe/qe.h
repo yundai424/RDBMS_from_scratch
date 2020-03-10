@@ -304,14 +304,51 @@ class GHJoin : public Iterator {
          Iterator *rightIn,               // Iterator of input S
          const Condition &condition,      // Join condition (CompOp is always EQ)
          const unsigned numPartitions     // # of partitions for each relation (decided by the optimizer)
-  ) {};
+  );
 
-  ~GHJoin() override = default;
+  ~GHJoin() override;
 
-  RC getNextTuple(void *data) override { return QE_EOF; };
+  RC getNextTuple(void *data) override;
 
   // For attribute in std::vector<Attribute>, name it as rel.attr
-  void getAttributes(std::vector<Attribute> &attrs) const override {};
+  void getAttributes(std::vector<Attribute> &attrs) const;
+
+ private:
+  Iterator *l_in_;
+  Iterator *r_in_;
+  std::vector<Attribute> l_attrs_;
+  std::vector<Attribute> r_attrs_;
+  int l_pos_;
+  int r_pos_;
+  const Condition condition_;
+  const unsigned num_partitions_;
+  std::vector<std::shared_ptr<FileHandle>> l_fhs_;
+  std::vector<std::shared_ptr<FileHandle>> r_fhs_;
+
+  RecordBasedFileManager *rbfm_;
+  int curr_partition_;
+  std::unordered_map<Key, std::vector<RID>, KeyHash> hash_map_;
+  RBFM_ScanIterator r_iter_;
+  char *r_buffer_;
+
+  bool same_key_in_left_;
+  std::pair<std::vector<RID>::iterator, std::vector<RID>::iterator> same_key_iter_; // curr and end
+
+
+  void dumpPartitions(bool is_left);
+
+  RC loadLeftPartition(int num);
+
+  int inline getHash(const Key &key) {
+    return KeyHash()(key) % num_partitions_;
+  }
+
+  std::string inline getPartitionFileName(int num, bool is_left) {
+    if (is_left)
+      return "left_" + l_attrs_[l_pos_].name + "_" + std::to_string(num);
+    else
+      return "right_" + r_attrs_[r_pos_].name + "_" + std::to_string(num);
+  }
 };
 
 class Aggregate : public Iterator {
