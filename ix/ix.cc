@@ -353,7 +353,7 @@ std::pair<int, bool> LFUCache::put(int key, bool lazy_pop_out) {
         lazy_popout.insert(to_be_delete->key);
       pop_out = {to_be_delete->key, true};
       FrequencyNode *fq_node = to_be_delete->freq_node;
-      std::cout << "pop out " << pop_out.first << std::endl;
+//      DB_DEBUG << "pop out " << pop_out.first;
       fq_node->RemoveNode(to_be_delete);
       nodes.erase(to_be_delete->key);
       delete to_be_delete;
