@@ -7,6 +7,7 @@
 #include <functional>
 #include <unordered_map>
 #include <algorithm>
+#include <cmath>
 
 typedef unsigned short SID; // slod it
 typedef unsigned PID; // page id
