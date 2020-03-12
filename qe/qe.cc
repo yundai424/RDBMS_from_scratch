@@ -484,6 +484,34 @@ float Aggregate::returnValue(float cnt, float val) {
   }
 }
 
+void Aggregate::getAttributes(std::vector<Attribute> & attrs) const {
+  std::string name = "";
+  switch (op_) {
+    case COUNT:
+      name += "COUNT";
+      break;
+    case SUM:
+      name += "SUM";
+      break;
+    case MAX:
+      name += "MAX";
+      break;
+    case MIN:
+      name += "MIN";
+      break;
+    case AVG:
+      name += "AVG";
+      break;
+  }
+  name += "(" + agg_attr_.name + ")";
+  attrs.clear();
+  if (is_group_by_) {
+    attrs.push_back(group_attr_);
+  }
+  attrs.push_back(Attribute(agg_attr_));
+  attrs.back().name = name;
+}
+
 /******************************
 *
 *         GHJoin

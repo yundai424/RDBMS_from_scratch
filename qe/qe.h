@@ -376,7 +376,7 @@ class Aggregate : public Iterator {
   // Please name the output attribute as aggregateOp(aggAttr)
   // E.g. Relation=rel, attribute=attr, aggregateOp=MAX
   // output attrname = "MAX(rel.attr)"
-  void getAttributes(std::vector<Attribute> &attrs) const override {};
+  void getAttributes(std::vector<Attribute> &attrs) const override;
 
  private:
   Iterator *input_;
