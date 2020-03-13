@@ -345,9 +345,9 @@ class GHJoin : public Iterator {
 
   std::string inline getPartitionFileName(int num, bool is_left) {
     if (is_left)
-      return "left_" + l_attrs_[l_pos_].name + "_" + std::to_string(num);
+      return RelationManager::DEFAULT_DB_DIR_ + "left_" + l_attrs_[l_pos_].name + "_" + std::to_string(num);
     else
-      return "right_" + r_attrs_[r_pos_].name + "_" + std::to_string(num);
+      return RelationManager::DEFAULT_DB_DIR_ + "right_" + r_attrs_[r_pos_].name + "_" + std::to_string(num);
   }
 };
 

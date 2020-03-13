@@ -562,14 +562,6 @@ GHJoin::GHJoin(Iterator *leftIn, Iterator *rightIn, const Condition &condition, 
 }
 
 GHJoin::~GHJoin() {
-  for (auto &fh : l_fhs_) {
-    fh->closeFile();
-    rbfm_->destroyFile(fh->name);
-  }
-  for (auto &fh : r_fhs_) {
-    fh->closeFile();
-    rbfm_->destroyFile(fh->name);
-  }
   if (r_buffer_) free(r_buffer_);
 }
 
@@ -637,7 +629,18 @@ RC GHJoin::getNextTuple(void * data) {
   // need to load next partition
   r_iter_.close();
   ++curr_partition_;
-  if (curr_partition_ >= num_partitions_) return QE_EOF; // reached end
+  if (curr_partition_ >= num_partitions_) {
+    // reached end
+    for (auto &fh : l_fhs_) {
+      fh->closeFile();
+      rbfm_->destroyFile(fh->name);
+    }
+    for (auto &fh : r_fhs_) {
+      fh->closeFile();
+      rbfm_->destroyFile(fh->name);
+    }
+    return QE_EOF;
+  }
   loadLeftPartition(curr_partition_);
   rbfm_->scan(*r_fhs_.at(curr_partition_), r_attrs_, "", CompOp::NO_OP, nullptr, {}, r_iter_);
   return getNextTuple(data);

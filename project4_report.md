@@ -82,8 +82,9 @@ I implemented Grace Hash Join and group-based hash aggregation.
 
 For convenience purpose, I abstract attribute value as `Key` object, which has `AttrType` indicating its type, and `int`, `float`, `std::string` fields that store its real value, and hash method that basically hash based on the string representation of its real value.
 
+All table/index/**GHJoin partition files** are stored in `./db_files` directory 
 
 ## 6. Other (optional)
 ##### Freely use this section to tell us about things that are related to the project 4, but not related to the other sections (optional)
 
-Finally built the whole database system bottom-up, which I would definitely not imagine when I just enrolled in this course and made the bold decision to do the projects solo. Project 4 is definitely the easiest one (at least not that nerve-wracking) but still much more than interesting and exciting. Thanks the nice professor and TAs for all the helps. Really learned a lot from 222!
+Finally built the whole database system bottom-up, which I would definitely not imagine when I just enrolled in this course. Project 4 is definitely the easiest one (at least not that nerve-wracking) but still much more than interesting and exciting. Thanks the nice professor and TAs for all the helps. Really learned a lot from 222!

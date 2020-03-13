@@ -52,6 +52,7 @@ class RM_IndexScanIterator {
 class RelationManager {
  public:
   static const directory_t MAX_SCHEMA_VER;
+  static const std::string DEFAULT_DB_DIR_;
 
   static RelationManager &instance();
 
@@ -119,7 +120,7 @@ class RelationManager {
   static RelationManager *_relation_manager;
 
   static const int SYSTEM_FLAG;
-  static const std::string DEFAULT_DB_DIR_;
+
   static const std::string TABLE_CATALOG_NAME_;
   static const std::string COLUMN_CATALOG_NAME_;
   static const std::vector<Attribute> TABLE_CATALOG_DESC_;
